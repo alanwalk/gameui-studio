@@ -1,0 +1,9 @@
+.layout-tools { display: grid; gap: 12px; }
+.layout-tools h2 { margin: 0; }
+.layout-reference-picker { display: grid; gap: 8px; }
+.layout-reference-picker input { max-width: 100%; }
+.layout-reference-result { display: grid; gap: 10px; }
+.layout-reference-preview { position: relative; width: 100%; overflow: hidden; background: #101a2b; }
+.layout-reference-preview img { width: 100%; height: 100%; display: block; }
+.layout-reference-preview span { position: absolute; border: 1px solid #ffcf6b; background: #ffcf6b18; box-sizing: border-box; }
+.layout-reference-result ul { max-height: 140px; overflow: auto; margin: 0; padding-left: 20px; }

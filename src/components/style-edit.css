@@ -1,0 +1,6 @@
+.style-edit-cancel { margin-top: 0; }
+.style-form-actions { display: flex; align-items: center; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+.style-form-actions button { min-width: 140px; height: 42px; padding: 0 18px; box-sizing: border-box; margin: 0; }
+.style-edit-references { display: grid; grid-template-columns: repeat(auto-fill,minmax(120px,1fr)); gap: 16px; margin: 16px 0; }
+.style-edit-references figure { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.style-edit-references img { width: 100%; height: 140px; object-fit: contain; background: var(--ink-3); border-radius: 6px; }

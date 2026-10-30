@@ -1,0 +1,26 @@
+.reskin-tool { width: min(1440px, 100%); margin: 0 auto; padding: 24px; }
+.reskin-toolbar, .reskin-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.reskin-toolbar { padding: 18px 0; border-bottom: 1px solid var(--line, #394155); }
+.reskin-toolbar label, .reskin-draft label { display: grid; gap: 8px; }
+.reskin-toolbar input { max-width: 230px; }
+.reskin-workspace { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 24px; margin-top: 22px; }
+.reskin-task-list { display: flex; flex-direction: column; gap: 10px; }
+.reskin-task-list button { text-align: left; display: grid; gap: 6px; overflow-wrap: anywhere; }
+.reskin-task-list button[aria-pressed="true"] { border-color: #8d9aff; background: #303758; }
+.reskin-task-list span { font-size: 12px; opacity: .8; }
+.reskin-content { min-width: 0; }
+.reskin-draft { display: grid; gap: 16px; }
+.reskin-draft input, .reskin-draft textarea, .reskin-draft select { width: 100%; }
+.reskin-draft-files { max-height: 300px; overflow: auto; display: grid; gap: 6px; overflow-wrap: anywhere; }
+.reskin-pack-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 16px; margin-top: 20px; }
+.reskin-pack-grid article { min-width: 0; border: 1px solid var(--line, #394155); border-radius: 10px; padding: 14px; }
+.reskin-pack-grid h4, .reskin-pack-grid p { overflow-wrap: anywhere; }
+.reskin-comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.reskin-comparison figure { margin: 0; min-width: 0; text-align: center; background: repeating-conic-gradient(#252938 0% 25%, #353a4a 0% 50%) 0 / 16px 16px; border-radius: 6px; }
+.reskin-comparison img, .reskin-comparison figure > span { width: 100%; height: 135px; object-fit: contain; display: block; }
+.reskin-comparison figcaption { background: #202430; padding: 5px; font-size: 12px; }
+.reskin-fallback { margin: 16px 0; overflow-wrap: anywhere; }
+.reskin-notice { white-space: pre-wrap; overflow-wrap: anywhere; padding: 14px; background: #202a35; max-height: 350px; overflow: auto; }
+.reskin-style-preview { max-width: 140px; max-height: 100px; object-fit: contain; }
+.reskin-content progress { width: 100%; margin-bottom: 16px; }
+@media (max-width: 760px) { .reskin-tool { padding: 14px; } .reskin-workspace { grid-template-columns: 1fr; } .reskin-task-list { max-height: 220px; overflow: auto; } }

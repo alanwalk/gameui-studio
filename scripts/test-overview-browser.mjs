@@ -1,0 +1,66 @@
+import { chromium } from 'playwright';
+import fs from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const directory = await fs.mkdtemp('./.data/overview-browser-');
+const browser = await chromium.launch({ channel: 'msedge', headless: true });
+try {
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('http://127.0.0.1:5174/');
+  const card = page.locator('.screen-card').first();
+  await card.waitFor();
+  for (const width of [1920, 2560, 1366]) {
+    await page.setViewportSize({ width, height: 1080 });
+    await page.waitForTimeout(150);
+    const geometry = await card.locator('.screen-preview-frame').evaluateAll(frames => frames.map(frame => {
+      const media = frame.querySelector('img,canvas');
+      const bounds = media.getBoundingClientRect();
+      return { bottom: bounds.bottom, right: bounds.right, width: bounds.width, height: bounds.height, fit: getComputedStyle(media).objectFit };
+    }));
+    assert.equal(geometry.length, 2);
+    assert.ok(geometry.every(item => item.height > 200 && item.bottom < 1080 && item.right <= width && item.fit === 'contain'));
+    assert.equal(await page.getByText('修改/生成要求：', { exact: false }).count(), 0);
+    await page.screenshot({ path: `${directory}/overview-${width}.png` });
+  }
+  await card.locator('.screen-preview-frame').first().hover();
+  await card.getByRole('button', { name: '编辑布局', exact: true }).click();
+  const layout = page.getByRole('dialog', { name: '布局编辑器', exact: true });
+  await layout.waitFor();
+  await page.waitForTimeout(200);
+  const canvas = await layout.locator('.wire-canvas').boundingBox();
+  assert.ok(canvas.height > 300 && canvas.y + canvas.height <= 1080);
+  await page.screenshot({ path: `${directory}/layout.png` });
+  page.once('dialog',dialog=>dialog.accept());
+  await layout.getByRole('button', { name: '关闭布局编辑器' }).click();
+  await card.locator('.screen-preview-frame').last().hover();
+  await card.getByRole('button', { name: '编辑资源', exact: true }).click();
+  const assets = page.getByRole('dialog', { name: '资源编辑器', exact: true });
+  await assets.waitFor();
+  await page.waitForTimeout(300);
+  const source = await assets.locator('.asset-source img').boundingBox();
+  assert.ok(source.height > 300 && source.y + source.height <= 1080);
+  await page.screenshot({ path: `${directory}/assets.png` });
+  await assets.getByRole('button', { name: '关闭资源编辑器' }).click();
+  await card.locator('.screen-preview-frame').last().hover();
+  await card.getByRole('button', { name: '微调结果', exact: true }).click();
+  const refine = page.getByRole('dialog', { name: '微调结果', exact: true });
+  await refine.waitFor();
+  assert.equal(await refine.locator('.refine-images figure').count(), 2);
+  await page.screenshot({ path: `${directory}/refine.png` });
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('dialog[open]').count(), 0);
+  await card.getByRole('button', { name: '版本与详情' }).click();
+  const versions = page.getByRole('dialog', { name: '版本与详情', exact: true });
+  await versions.waitFor();
+  assert.equal(await versions.locator('details').first().getAttribute('open'), null);
+  await versions.getByRole('button', { name: '关闭版本与详情' }).click();
+  await page.getByRole('button', { name: '项目风格', exact: true }).click();
+  await page.getByRole('dialog', { name: '项目风格', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '导出', exact: true }).click();
+  await page.getByRole('dialog', { name: '导出资源', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  assert.deepEqual(errors, []);
+  console.log(`PASS overview 1366/1920/2560: complete media, hover actions, layout/assets pages, refine dialog and Escape; ${directory}`);
+} finally { await browser.close(); }

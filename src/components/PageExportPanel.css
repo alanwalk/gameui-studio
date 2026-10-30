@@ -1,0 +1,8 @@
+.page-export-panel { padding: 16px; border: 1px solid #354054; border-radius: 8px; margin-top: 16px; }
+.page-export-panel h3 { margin: 0 0 12px; }
+.page-export-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.page-export-controls label { display: flex; flex-direction: column; gap: 6px; }
+.page-export-controls select { min-width: 170px; max-width: 100%; }
+.page-export-panel p { font-size: 13px; line-height: 1.5; }
+.page-export-error { color: #ff9a9a; overflow-wrap: anywhere; }
+.page-export-report { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; max-height: 260px; overflow: auto; }

@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import {chromium} from 'playwright';
+const base='http://127.0.0.1:5174';
+const directory=await fs.mkdtemp('./.data/drawing-originals-');
+const state=await fetch(base+'/api/drawing/state').then(response=>response.json());
+const tasks=[...state.tasks].sort((a,b)=>b.createdAt-a.createdAt);
+const index=tasks.findIndex(task=>task.references.some(id=>state.images.find(image=>image.id===id)?.name==='风格参考合集（非生成预览）'));
+assert.ok(index>=0,'historical collection fixture exists');
+const reference=tasks[index].references.find(id=>state.images.find(image=>image.id===id)?.name==='风格参考合集（非生成预览）');
+const resolved=await fetch(base+'/api/style-generation/source-images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({drawingImage:reference})}).then(response=>response.json());
+assert.ok(resolved.images.length>1,'historical collection resolves to saved original images');
+const browser=await chromium.launch({channel:'msedge',headless:true});
+try {
+ const page=await browser.newPage({viewport:{width:1440,height:1000}});
+ const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ await page.goto(base);
+ await page.getByRole('button',{name:'画图工具',exact:true}).click();
+ await page.locator('.drawing-history>button').nth(index).click();
+ await page.waitForFunction(count=>document.querySelectorAll('.drawing-reference-item').length===count,resolved.images.length);
+ const first=page.locator('.drawing-reference-item').first();
+ await first.locator('img').evaluate(image=>image.decode());
+ const size=await first.locator('img').evaluate(image=>({w:image.naturalWidth,h:image.naturalHeight}));
+ const downloadEvent=page.waitForEvent('download');
+ await first.getByRole('link',{name:'下载单图'}).click();
+ const download=await downloadEvent;await download.saveAs(directory+'/reference.png');
+ const source=await fetch(base+'/api/image?name='+encodeURIComponent(resolved.images[0]));
+ assert.deepEqual(await fs.readFile(directory+'/reference.png'),Buffer.from(await source.arrayBuffer()));
+ await first.getByRole('button').click();
+ const dialog=page.locator('.drawing-modal');await dialog.waitFor();
+ const modal=await dialog.locator('img').evaluate(image=>({w:image.naturalWidth,h:image.naturalHeight,background:getComputedStyle(image).backgroundImage}));
+ assert.deepEqual({w:modal.w,h:modal.h},size);
+ assert.ok(modal.background.includes('conic-gradient'));
+ await page.screenshot({path:directory+'/single-reference.png'});
+ assert.deepEqual(errors,[]);
+ console.log('PASS historical original matching, separate previews, checkerboard and byte-identical single download; '+directory);
+}finally{await browser.close();}
