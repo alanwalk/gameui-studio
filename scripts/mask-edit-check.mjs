@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { browserLaunchOptions } from './browser-options.mjs';
 
 const built = await build({ entryPoints: ['src/lib/maskEdit.ts'], bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'silent' });
 const { MaskHistory } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`);
@@ -84,7 +85,7 @@ console.log(`${passed} pixel/history behavior checks passed`);
 if (process.argv.includes('--browser')) {
   const moduleName = process.env.MASK_EDIT_PLAYWRIGHT;
   const playwright = await import(moduleName ? pathToFileURL(moduleName).href : 'playwright');
-  const browser = await playwright.chromium.launch({ channel: 'msedge', headless: true });
+  const browser = await playwright.chromium.launch(browserLaunchOptions());
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 1000 } });
     const errors = [];
@@ -186,6 +187,7 @@ if (process.argv.includes('--browser')) {
     await page.getByRole('button', { name: '按此框从原图色键提取', exact: true }).click();
     await page.waitForFunction(() => window.latestElements.length === 2);
     assert.equal(await page.evaluate(() => window.latestElements[1].extractionMethod), 'color-key');
+    assert.equal(await page.evaluate(() => window.latestElements[1].approved), false, 'new extraction requires human review');
     assert.deepEqual(await page.evaluate(() => window.latestElements[1].rect), {x:8,y:8,w:16,h:16});
     assert.equal(await page.evaluate(() => window.latestElements[1].slice.canvas.getContext('2d').getImageData(8,8,1,1).data[3]), 255);
     console.log('PASS browser: pointer-drawn rectangle extracts actual source pixels with color-key provenance');
@@ -194,11 +196,15 @@ if (process.argv.includes('--browser')) {
     await page.getByRole('button', { name: '保存名称', exact: true }).click();
     await page.waitForFunction(() => window.latestElements[1].objectName === 'ManualRenamed' && document.querySelectorAll('.slice-preview-card label')[1].textContent.includes('ManualRenamed'));
     // Controlled props echo asynchronously in this fixture; assert after that echo.
+    assert.equal(await page.getByLabel('审核通过', { exact: true }).isChecked(), false);
+    await page.getByLabel('审核通过', { exact: true }).click();
+    await page.waitForFunction(() => window.latestElements[1].approved === true && document.querySelectorAll('.slice-preview-card input')[1].checked);
     await page.getByLabel('审核通过', { exact: true }).click();
     await page.waitForFunction(() => window.latestElements[1].approved === false && !document.querySelectorAll('.slice-preview-card input')[1].checked);
     const downloadEvent = page.waitForEvent('download');
     await page.getByRole('button', { name: '下载这张 PNG', exact: true }).click();
     assert.equal((await downloadEvent).suggestedFilename(), 'T_UI_Common_ManualRenamed.png');
+    await page.getByText('坐标与重切', { exact: true }).click();
     await fields.getByLabel('w', { exact: true }).fill('100');
     const saveCount = await page.evaluate(() => window.snapshots.length);
     await page.getByRole('button', { name: '按此框从原图色键提取', exact: true }).click();

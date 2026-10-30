@@ -1337,6 +1337,7 @@ textarea:focus {
 .slice-bg-checker { background: repeating-conic-gradient(#838383 0% 25%, #b7b7b7 0% 50%) 0 0 / 16px 16px; }
 .slice-bg-light { background: #f4f4f4; }
 .slice-bg-dark { background: #111; }
+.slice-bg-color { background: #7452a6; }
 .mask-edit-canvas { cursor: crosshair; touch-action: none; image-rendering: pixelated; }
 .slice-source-box { position: relative; width: fit-content; max-width: 100%; margin: 10px auto; }
 .slice-source-box img { display: block; max-width: 100%; max-height: 36vh; object-fit: contain; }

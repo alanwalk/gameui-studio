@@ -35,7 +35,7 @@ async function loadApi(controlled) {
       builder.onLoad({ filter: /.*/, namespace: 'controlled' }, ({ path: name }) => {
         if (name === 'node:fs/promises') return { contents: `import fs from 'node:fs/promises'; export default { ...fs, stat: async (file) => {
           const mode = globalThis.__segmentationApiTest.mode;
-          if ((mode === 'missing' && file.endsWith('python.exe')) || (mode === 'weights' && file.endsWith('.pt'))) throw new Error('missing fixture');
+          if ((mode === 'missing' && (file.endsWith('python.exe') || file.endsWith('/bin/python'))) || (mode === 'weights' && file.endsWith('.pt'))) throw new Error('missing fixture');
           return { isFile: () => true, isDirectory: () => true };
         } };` };
         return { contents: `import { spawn as realSpawn } from 'node:child_process';
@@ -60,7 +60,16 @@ async function loadApi(controlled) {
                 if (request.bbox[2] > 1 || request.bbox[3] > 1 || request.points?.some(p => p.x >= 1 || p.y >= 1)) {
                   console.log(JSON.stringify({ok:false,error:{type:'ValueError',message:'bbox/point outside image bounds'}})); process.exitCode=1; return;
                 }
-                console.log(JSON.stringify({width:1,height:1,maskBase64:'${png}',rgbaBase64:'${png}',score:0.9,elapsedMs:3,model:'controlled-protocol',request}));
+                const diagnostics = {
+                  promptBounds:[0,0,1,1], inferenceBounds:[0,0,1,1], maskBounds:[0,0,1,1], outputBounds:[0,0,1,1],
+                  quality:{status:'review',issues:[],removedComponents:0,removedPixels:0,retainedComponents:1},
+                  refinement:{method:'source-alpha',status:'preserved',softAlphaPixels:0,changedRgbPixels:0,trimapRadius:0},
+                };
+                if (mode === 'invalid-bounds') diagnostics.outputBounds=[0,0,2,1];
+                if (mode === 'invalid-nesting') diagnostics.maskBounds=[0,0,0,1];
+                if (mode === 'invalid-refinement') diagnostics.refinement={...diagnostics.refinement,method:'binary-mask',status:'degraded'};
+                if (mode === 'invalid-quality') diagnostics.quality={...diagnostics.quality,issues:[{code:'point-conflict',severity:'error',message:'Conflict'}]};
+                console.log(JSON.stringify({protocolVersion:2,width:1,height:1,maskBase64:'${png}',rgbaBase64:'${png}',score:0.9,elapsedMs:3,model:'controlled-protocol',request,...diagnostics}));
               });
             `)};
             const child = realSpawn(process.execPath, ['-e', code, state.mode, args.includes('--health') ? 'probe' : 'segment'], options);
@@ -109,10 +118,14 @@ async function controlledTests() {
       assert.equal(result.status, status, `${name}: ${JSON.stringify(result.body)}`);
       return result.body;
     };
-    await check('protocol-success', valid, 200);
+    const protocol = await check('protocol-success', valid, 200);
+    assert.equal(protocol.protocolVersion, 2);
+    assert.deepEqual(protocol.outputBounds, [0,0,1,1]);
+    assert.equal(protocol.refinement.method, 'source-alpha');
+    assert.equal(protocol.quality.status, 'review');
     const launch = globalThis.__segmentationApiTest.calls.at(-1);
     assert.equal(launch.shell, false);
-    assert.equal(launch.exe, path.join(root, '.venv-seg/Scripts/python.exe'));
+    assert.equal(launch.exe, path.join(root, process.platform === 'win32' ? '.venv-seg/Scripts/python.exe' : '.venv-seg/bin/python'));
     assert.deepEqual(launch.args, [
       path.join(root, 'scripts/segment.py'),
       '--checkpoint', path.join(root, '.data/segmentation/sam2/sam2.1_hiera_small.pt'),
@@ -121,15 +134,17 @@ async function controlledTests() {
       '--config', 'configs/sam2.1/sam2.1_hiera_s.yaml',
     ]);
     for (const sourceImage of ['../x.png', 'C:\\x.png', '/x.png', 'a/b.png', 'https://example.com/a.png', 'a.png;cmd']) await check('reject-path-' + sourceImage, { ...valid, sourceImage }, 400);
-    for (const rect of [null, { x: -1, y: 0, w: 1, h: 1 }, { x: '0', y: 0, w: 1, h: 1 }, { x: 0, y: 0, w: 0, h: 1 }, { x: 99999, y: 0, w: 2, h: 1 }]) await check('invalid-rect', { ...valid, rect }, 400);
+    for (const rect of [null, { x: -1, y: 0, w: 1, h: 1 }, { x: '0', y: 0, w: 1, h: 1 }, { x: 0.5, y: 0, w: 1, h: 1 }, { x: 0, y: 0, w: 0, h: 1 }, { x: 99999, y: 0, w: 2, h: 1 }]) await check('invalid-rect', { ...valid, rect }, 400);
     await check('invalid-point', { ...valid, points: [{ x: 0, y: 0, label: 2 }] }, 400);
+    await check('fractional-point', { ...valid, points: [{ x: 0.25, y: 0, label: 1 }] }, 400);
     await check('too-many-points', { ...valid, points: Array(257).fill({ x: 0, y: 0, label: 1 }) }, 400);
     await check('invalid-json', '{', 400);
     await check('body-limit', { ...valid, extra: 'x'.repeat(66000) }, 413);
     await check('method', undefined, 405, '/api/segment', 'GET');
     await check('not-found', { ...valid, sourceImage: 'missing.png' }, 404);
     await check('worker-real-bounds-contract', { ...valid, rect: { x: 0, y: 0, w: 2, h: 2 } }, 400);
-    for (const [testMode, status] of [['missing', 503], ['weights', 503], ['imports', 503], ['timeout', 504], ['malformed', 502], ['overflow', 502], ['stderr', 502]]) {
+    for (const [testMode, status] of [['missing', 503], ['weights', 503], ['imports', 503], ['timeout', 504], ['malformed', 502], ['overflow', 502], ['stderr', 502],
+      ['invalid-bounds', 502], ['invalid-nesting', 502], ['invalid-refinement', 502], ['invalid-quality', 502]]) {
       mode = testMode;
       const body = await check(testMode, valid, status);
       if (mode === 'stderr') assert.ok(body.error.length < 4300);
@@ -190,9 +205,11 @@ async function clientTests() {
   const client = await import('data:text/javascript;base64,' + Buffer.from(bundle.outputFiles[0].text).toString('base64'));
   const originalGlobals = { fetch: globalThis.fetch, Image: globalThis.Image, document: globalThis.document };
   const sourcePixels = new Uint8ClampedArray([10,20,30,255,40,50,60,255,70,80,90,255,100,110,120,255]);
-  const rgbaPixels = new Uint8ClampedArray([201,202,203,255,201,202,203,0,201,202,203,255,201,202,203,255]);
+  const rgbaPixels = new Uint8ClampedArray([201,202,203,128,201,202,203,0,201,202,203,255,201,202,203,255]);
   const requests = [];
   let fail = false;
+  let invalidBounds = false;
+  let failedQuality = false;
   class Canvas {
     width = 0; height = 0; pixels;
     getContext() {
@@ -224,10 +241,15 @@ async function clientTests() {
       requests.push({ url, body });
       if (url === '/api/upload') return { ok: true, json: async () => ({ fileName: 'mask-saved.png' }) };
       if (fail) return { ok: false, status: 503, json: async () => ({ error: 'runtime missing' }) };
-      return { ok: true, json: async () => ({ width: 2, height: 2, rgbaBase64: png, maskBase64: png }) };
+      return { ok: true, json: async () => ({ protocolVersion: 2, width: 2, height: 2, rgbaBase64: png, maskBase64: png,
+        promptBounds: [body.rect.x,body.rect.y,body.rect.x+body.rect.w,body.rect.y+body.rect.h],
+        inferenceBounds: [0,0,2,2], maskBounds: [0,0,2,2], outputBounds: invalidBounds ? [0,0,3,2] : [0,0,2,2],
+        quality: { status: failedQuality ? 'failed' : 'review', issues: failedQuality ? [{ code: 'point-conflict', severity: 'error', message: '点冲突' }] : [], removedComponents: 0, removedPixels: 0, retainedComponents: 1 },
+        refinement: { method: 'pymatting-cf', status: 'applied', softAlphaPixels: 1, changedRgbPixels: 4, trimapRadius: 1 },
+      }) };
     };
     const oldCanvas = { sentinel: true };
-    const element = { id: 'original-id', label: 'coin', rect: { x: 1, y: 0, w: 1, h: 2 }, approved: false,
+    const element = { id: 'original-id', label: 'coin', rect: { x: 1, y: 0, w: 1, h: 2 }, approved: true,
       repainted: true, slice: { canvas: oldCanvas }, sourceMarker: 'task-original' };
     const points = [{ x: 1, y: 1, label: 1 }, { x: 0, y: 0, label: 0 }];
     const segmented = await client.segmentElement('source.png', element, points);
@@ -237,19 +259,30 @@ async function clientTests() {
     assert.equal(segmented.maskImage, 'mask-saved.png');
     assert.equal(segmented.approved, false);
     assert.equal(segmented.sourceMarker, 'task-original');
-    assert.deepEqual(segmented.rect, element.rect);
+    assert.deepEqual(segmented.rect, { x: 0, y: 0, w: 2, h: 2 });
+    assert.deepEqual(element.rect, { x: 1, y: 0, w: 1, h: 2 });
     assert.notEqual(segmented.slice.canvas, oldCanvas);
     assert.equal(element.slice.canvas, oldCanvas);
-    assert.deepEqual(Array.from(segmented.slice.canvas.pixels), [40,50,60,0,100,110,120,255]);
+    assert.deepEqual(Array.from(segmented.slice.canvas.pixels), Array.from(rgbaPixels));
+    assert.equal(segmented.segmentationDiagnostics.refinement.softAlphaPixels, 1);
+    assert.deepEqual(segmented.segmentationDiagnostics.promptBounds, [1,0,2,2]);
     assert.ok(Object.values(segmented.slice.border.sideScore).some(score => score > 0));
     assert.ok(segmented.slice.border.bgColor.some(channel => channel > 0));
     const progress = [];
     const batch = await client.segmentElements([element, { ...element, id: 'second' }], 'source.png', p => progress.push(p));
     assert.deepEqual(batch.map(e => e.id), ['original-id', 'second']);
     assert.equal(progress.at(-1).done, 2);
+    invalidBounds = true;
+    await assert.rejects(client.segmentElement('source.png', element), /输出边界/);
+    invalidBounds = false;
+    failedQuality = true;
+    const review = await client.segmentElement('source.png', element);
+    assert.equal(review.approved, false);
+    assert.equal(review.segmentationDiagnostics.quality.status, 'failed');
+    failedQuality = false;
     fail = true;
     await assert.rejects(client.segmentElements([element], 'source.png', () => {}), /original-id.*runtime missing/);
-    events.push({ name: 'client-crop-original-rgb-alpha-clone-mask-points-batch-no-fallback', passed: true,
+    events.push({ name: 'client-expanded-output-refined-rgba-diagnostics-mask-points-batch-no-fallback', passed: true,
       limitation: 'controlled canvas/image decoding, not a real browser pixel acceptance' });
   } finally { Object.assign(globalThis, originalGlobals); }
 }

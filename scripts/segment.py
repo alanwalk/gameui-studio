@@ -22,6 +22,7 @@ DEFAULT_CHECKPOINT = SAM2_ROOT / "sam2.1_hiera_small.pt"
 DEFAULT_SITE = SAM2_ROOT / "site"
 DEFAULT_SOURCE = SAM2_ROOT / "source"
 DEFAULT_CONFIG = "configs/sam2.1/sam2.1_hiera_s.yaml"
+MATTING_SITE = ROOT / ".data" / "matting" / "site"
 RULE_VERSION = "v1-frozen-no-revision"
 WHOLE_CONTROL_KINDS = {"panel", "button"}
 
@@ -65,6 +66,8 @@ def read_request(request):
         image = loaded.convert("RGBA")
     width, height = image.size
     box = numbers(request.get("bbox"), 4, "bbox")
+    if not all(type(value) is int for value in box):
+        raise ValueError("bbox must contain integer original-image coordinates")
     x0, y0, x1, y1 = box
     if not (0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height):
         raise ValueError("bbox must be original-image xyxy within image bounds")
@@ -76,6 +79,8 @@ def read_request(request):
         if not isinstance(point, dict):
             raise ValueError("each point must be {x,y,label}")
         x, y = numbers([point.get("x"), point.get("y")], 2, "point")
+        if type(x) is not int or type(y) is not int:
+            raise ValueError("point coordinates must be original-image integers")
         label = point.get("label")
         if isinstance(label, bool) or not isinstance(label, int) or label not in (0, 1):
             raise ValueError("point label must be integer 1 (foreground) or 0 (background)")
@@ -273,8 +278,15 @@ def select_candidate(masks, scores, box, points, kind):
 
 def segment(request, checkpoint, site, source, config, threads):
     started = time.perf_counter()
+    # Optional dependencies must be prepared explicitly. This matches the offline
+    # matting benchmark's isolated directory; missing packages remain diagnostic.
+    if MATTING_SITE.is_dir():
+        sys.path.insert(0, str(MATTING_SITE))
+    os.environ.setdefault("NUMBA_CACHE_DIR", str(ROOT / ".data" / "matting" / "numba-cache"))
+    os.environ.setdefault("NUMBA_NUM_THREADS", str(threads))
     import numpy as np
     from PIL import Image
+    from segment_refinement import inference_bounds, inference_rgb, prepare_output
 
     image, box, coordinates, labels, kind, output = read_request(request)
     if not checkpoint.is_file():
@@ -312,11 +324,19 @@ def segment(request, checkpoint, site, source, config, threads):
     )
     timings["modelLoadMs"] = round((time.perf_counter() - model_started) * 1000, 3)
 
-    rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
+    points = [{"x": coordinate[0], "y": coordinate[1], "label": labels[index]}
+              for index, coordinate in enumerate(coordinates)]
+    roi = inference_bounds(box, image.width, image.height, points)
+    left, top, right, bottom = roi
+    local_box = [box[0] - left, box[1] - top, box[2] - left, box[3] - top]
+    local_points = [{"x": point["x"] - left, "y": point["y"] - top, "label": point["label"]} for point in points]
+    # Hidden RGB beneath alpha=0 is not image content. Composite only the model
+    # input; ownership extraction and native foreground colours use the original.
+    rgb = inference_rgb(np.asarray(image.crop(tuple(roi)), dtype=np.uint8))
     point_coords = None
     point_labels = None
     if coordinates:
-        point_coords = np.asarray(coordinates, dtype=np.float32)
+        point_coords = np.asarray([[point["x"], point["y"]] for point in local_points], dtype=np.float32)
         point_labels = np.asarray(labels, dtype=np.int32)
     with torch.inference_mode():
         encode_started = time.perf_counter()
@@ -326,37 +346,37 @@ def segment(request, checkpoint, site, source, config, threads):
         masks, scores, _ = predictor.predict(
             point_coords=point_coords,
             point_labels=point_labels,
-            box=np.asarray(box, dtype=np.float32),
+            box=np.asarray(local_box, dtype=np.float32),
             multimask_output=True,
         )
         timings["predictMs"] = round((time.perf_counter() - predict_started) * 1000, 3)
 
     masks = np.asarray(masks)
     scores = np.asarray(scores)
-    if masks.shape != (3, image.height, image.width):
+    if masks.shape != (3, bottom - top, right - left):
         raise RuntimeError("predictor returned masks with incorrect dimensions")
     if not np.all((masks == 0) | (masks == 1)):
         raise RuntimeError("predictor returned non-binary masks")
     chosen_index, candidates, reason = select_candidate(
         masks,
         scores,
-        [int(value) for value in box],
-        [{"x": int(point[0]), "y": int(point[1]), "label": labels[index]}
-         for index, point in enumerate(coordinates)],
+        local_box,
+        local_points,
         kind,
     )
     mask = masks[chosen_index].astype(np.bool_)
     if not mask.any():
         raise RuntimeError("predictor returned an empty chosen mask; adjust bbox or points")
 
-    mask_image = Image.fromarray(mask.astype(np.uint8) * 255)
-    rgba = np.array(image, copy=True)
-    # Preserve every source RGB value and existing alpha; change alpha only outside mask.
-    rgba[~mask, 3] = 0
+    refinement_started = time.perf_counter()
+    binary_mask, rgba, diagnostics = prepare_output(image, mask, box, roi, points, MATTING_SITE)
+    timings["refinementMs"] = round((time.perf_counter() - refinement_started) * 1000, 3)
+    # Binary object membership remains separate from the refined continuous alpha.
+    mask_image = Image.fromarray(binary_mask)
     target = Image.fromarray(rgba)
-    ys, xs = np.nonzero(mask)
     result = {
         "ok": True,
+        "protocolVersion": 2,
         "model": "SAM2.1-small",
         "modelType": "sam2.1_hiera_small",
         "device": "cpu",
@@ -364,13 +384,8 @@ def segment(request, checkpoint, site, source, config, threads):
         "height": image.height,
         "bbox": box,
         "kind": kind,
-        "maskBounds": [
-            int(xs.min()),
-            int(ys.min()),
-            int(xs.max()) + 1,
-            int(ys.max()) + 1,
-        ],
-        "maskPixels": int(mask.sum()),
+        **diagnostics,
+        "maskPixels": int((binary_mask > 0).sum()),
         "predictedIou": float(scores[chosen_index]),
         "score": float(scores[chosen_index]),
         "chosenIndex": chosen_index,

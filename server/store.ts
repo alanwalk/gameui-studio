@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Project, Screen, SliceTask } from '../src/types';
+import { isSegmentationDiagnostics } from '../src/lib/segmentationTypes';
 
 /**
  * Projects live on disk, not in localStorage: one generated screen is a multi-megabyte
@@ -372,11 +373,20 @@ export function validateSliceTask(value: unknown): asserts value is SliceTask {
       throw new Error('无效的素材元素坐标或尺寸');
     }
     if (element.text !== undefined && typeof element.text !== 'string') throw new Error('无效的素材文本');
+    if (element.textPolicy !== undefined && !oneOf(element.textPolicy, ['remove', 'preserve', 'separate'])) throw new Error('无效的文字处理策略');
+    if (element.coordinateSpace !== undefined && !oneOf(element.coordinateSpace, ['source', 'sheet'])) throw new Error('无效的素材坐标空间');
+    if (element.sourceSheetImage !== undefined && !fileName(element.sourceSheetImage)) throw new Error('无效的原始组件表引用');
+    if (element.qualityWarnings !== undefined && (!Array.isArray(element.qualityWarnings) || element.qualityWarnings.length > 32 ||
+      !element.qualityWarnings.every((message) => typeof message === 'string' && message.length <= 500))) throw new Error('无效的素材质量提示');
     if (element.extractionMethod !== undefined && !oneOf(element.extractionMethod, ['color-key', 'segmentation', 'repaint', 'manual', 'ai-sheet'])) throw new Error('无效的提取方式');
     if (element.repainted !== undefined && typeof element.repainted !== 'boolean') throw new Error('无效的重绘状态');
     if (element.processingStatus !== undefined && !oneOf(element.processingStatus, ['pending', 'running', 'done', 'failed', 'interrupted'])) throw new Error('无效的处理状态');
     if (element.processingError !== undefined && typeof element.processingError !== 'string') throw new Error('无效的处理错误');
     if (element.maskImage !== undefined && !fileName(element.maskImage)) throw new Error('无效的蒙版引用');
+    if (element.segmentationDiagnostics !== undefined &&
+      !isSegmentationDiagnostics(element.segmentationDiagnostics, value.width as number, value.height as number)) {
+      throw new Error('无效的分割质量诊断');
+    }
     if (element.slice === undefined) continue;
     const slice = element.slice;
     if (!record(slice) || !fileName(slice.image) || 'canvas' in slice || !positiveInteger(slice.width) || !positiveInteger(slice.height)) {

@@ -5,6 +5,7 @@ import { canvasToDataUrl } from './image';
 import { refineRect, sliceElement } from './key';
 import { buildFileName, deriveName } from './naming';
 import { detectElements, fitToBox, generateCleanPlate } from './magpie';
+import { prepareAssetReferences } from './assetReference';
 
 export type Stage = 'idle' | 'detect' | 'slice' | 'plate' | 'done' | 'error';
 
@@ -94,11 +95,12 @@ export function toUiElements(detected: DetectedElement[], settings: Settings): U
       objectName,
       state,
       text: entry.element.text,
+      textPolicy: entry.element.textPolicy ?? 'separate',
       layer: entry.element.layer,
       occluded: entry.occluded,
       // Text should become an in-engine TMP node, so it never needs a repaint.
       needsAi: entry.occluded && !isText,
-      approved: !isText || settings.includeTextAsImage,
+      approved: false,
       slice: undefined,
     } satisfies UiElement;
   });
@@ -138,6 +140,9 @@ export function sliceAll(
       slice,
       extractionMethod: 'color-key',
       repainted: false,
+      approved: false,
+      segmentationDiagnostics: undefined,
+      maskImage: undefined,
     };
   });
 }
@@ -146,21 +151,22 @@ export type PlateOutcome = { id: string; ok: boolean; error?: string };
 
 /**
  * Stage 3: repaint only the elements that are actually covered. Magpie's image model
- * returns a transparent background natively, so the result needs no colour keying at
- * all - it is simply scaled back into the element's original pixel box.
+ * is asked for native alpha. Validate the single foreground, discard only reported
+ * isolated weak debris, then fit its complete support without stretching it.
  */
 export async function plateOccluded(
   elements: UiElement[],
   source: { dataUrl: string },
   onProgress: (p: Progress) => void,
 ): Promise<{ outcomes: PlateOutcome[]; updated: UiElement[] }> {
-  const targets = elements.filter((e) => e.needsAi && e.approved);
+  const targets = elements.filter((element) => element.needsAi && element.kind !== 'text');
   const outcomes: PlateOutcome[] = [];
-  const patched = new Map<string, SliceResult>();
+  const patched = new Map<string, { slice: SliceResult; warnings: string[] }>();
 
   let done = 0;
   for (const element of targets) {
     try {
+      const references = await prepareAssetReferences(element, source.dataUrl);
       const url = await generateCleanPlate({
         element: {
           label: element.label,
@@ -168,12 +174,14 @@ export async function plateOccluded(
           rect: element.rect,
           layer: element.layer,
           description: element.description || element.label,
+          textPolicy: element.textPolicy,
         },
-        referenceDataUrl: source.dataUrl,
+        ...references,
+        textPolicy: element.textPolicy,
       });
 
       const fitted = await fitToBox(url, element.rect.w, element.rect.h);
-      patched.set(element.id, await sliceFromDataUrl(fitted, element.rect));
+      patched.set(element.id, { slice: await sliceFromDataUrl(fitted.dataUrl, element.rect), warnings: fitted.warnings });
       outcomes.push({ id: element.id, ok: true });
     } catch (error) {
       outcomes.push({
@@ -197,9 +205,15 @@ export async function plateOccluded(
     if (!plate) return element;
     return {
       ...element,
-      slice: plate,
+      slice: plate.slice,
+      qualityWarnings: [...new Set([...(element.qualityWarnings ?? []), ...plate.warnings])].slice(0, 32),
       extractionMethod: 'repaint',
       repainted: true,
+      approved: false,
+      maskImage: undefined,
+      segmentationDiagnostics: undefined,
+      processingStatus: 'done',
+      processingError: undefined,
     };
   });
 

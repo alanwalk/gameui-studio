@@ -20,6 +20,10 @@ export type ExportEntry = {
   extractionMethod?: UiElement['extractionMethod'];
   processingStatus?: UiElement['processingStatus'];
   processingError?: string;
+  coordinateSpace?: UiElement['coordinateSpace'];
+  sourceSheetImage?: string;
+  requiresPlacement?: boolean;
+  textPolicy?: UiElement['textPolicy'];
   imageSize: { width: number; height: number };
   /** Full PNG maps to source rect; differing sizes mean scaling, not an inferred trim. */
   sourceMapping: { source: UiElement['rect']; destination: UiElement['rect'] };
@@ -85,6 +89,10 @@ function collectAssets(elements: UiElement[], settings: Settings) {
       extractionMethod: element.extractionMethod,
       processingStatus: element.processingStatus,
       processingError: element.processingError,
+      coordinateSpace: element.coordinateSpace ?? (element.extractionMethod === 'ai-sheet' ? 'sheet' : undefined),
+      sourceSheetImage: element.sourceSheetImage,
+      requiresPlacement: element.coordinateSpace === 'sheet' || element.extractionMethod === 'ai-sheet' ? true : undefined,
+      textPolicy: element.textPolicy,
       imageSize: { width: slice.width, height: slice.height },
       sourceMapping: {
         source: element.rect,
@@ -137,6 +145,7 @@ export async function buildZip(
         w: entry.source.w,
         h: entry.source.h,
         layer: entry.layer,
+        ...(entry.requiresPlacement ? { coordinateSpace: 'sheet', requiresPlacement: true, sourceSheetImage: entry.sourceSheetImage } : {}),
       })),
       null,
       2,

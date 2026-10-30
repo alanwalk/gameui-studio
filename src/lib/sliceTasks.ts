@@ -108,7 +108,7 @@ export async function repaintTask(
   repaintingTasks.add(task.id);
   try {
     let current = elements;
-    const targets = elements.filter((element) => element.needsAi && element.approved && !element.repainted);
+    const targets = elements.filter((element) => element.needsAi && element.kind !== 'text' && !element.repainted);
     for (const element of targets) {
       current = current.map((entry) => entry.id === element.id ? { ...entry, processingStatus: 'running', processingError: undefined } : entry);
       await session.save({ ...task, status: 'running' }, current, true);

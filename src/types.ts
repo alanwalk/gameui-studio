@@ -1,4 +1,7 @@
+import type { SegmentationDiagnostics } from './lib/segmentationTypes';
+
 export type Rect = { x: number; y: number; w: number; h: number };
+export type TextPolicy = 'remove' | 'preserve' | 'separate';
 
 export type ElementKind =
   | 'panel'
@@ -19,6 +22,8 @@ export type DetectedElement = {
   description: string;
   /** Present when kind is 'text': the readable string, which should become a TMP node. */
   text?: string;
+  /** Dynamic labels are separated from artwork; decorative lettering can be preserved. */
+  textPolicy?: TextPolicy;
 };
 
 export type BorderSide = 'top' | 'right' | 'bottom' | 'left';
@@ -50,6 +55,7 @@ export type UiElement = {
   objectName: string;
   state: string;
   text?: string;
+  textPolicy?: TextPolicy;
   layer: number;
   occluded: boolean;
   needsAi: boolean;
@@ -59,6 +65,11 @@ export type UiElement = {
   processingStatus?: 'pending' | 'running' | 'done' | 'failed' | 'interrupted';
   processingError?: string;
   maskImage?: string;
+  /** Sheet coordinates must never be used to crop the original screenshot. */
+  coordinateSpace?: 'source' | 'sheet';
+  sourceSheetImage?: string;
+  qualityWarnings?: string[];
+  segmentationDiagnostics?: SegmentationDiagnostics;
   slice?: SliceResult;
 };
 

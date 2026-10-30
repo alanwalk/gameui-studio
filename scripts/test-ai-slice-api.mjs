@@ -39,14 +39,22 @@ const reference = await sharp({
 }).png().toBuffer();
 let mode = 'immediate';
 let calls = 0;
+let expectedKind = 'sheet';
+let expectedReferences = 1;
 globalThis.aiSliceProvider = {
   async generateImage(args) {
     calls++;
     assert.equal(args.background, 'transparent');
     assert.equal(args.quality, 'high');
     assert.equal(args.n, 1);
-    assert.equal(args.size, '12x8');
+    assert.equal(args.size, expectedKind === 'sheet' ? '12x8' : undefined);
+    assert.equal(args.referenceImages.length, expectedReferences);
     assert.equal((await sharp(args.referenceImages[0]).metadata()).width, 12);
+    assert.equal((await sharp(args.referenceImages[0]).metadata()).format, 'png');
+    if (expectedReferences === 2) {
+      assert.equal((await sharp(args.referenceImages[1]).metadata()).width, 16);
+      assert.equal((await sharp(args.referenceImages[1]).metadata()).format, 'png');
+    }
     if (mode === 'pending') return { pendingId: 'controlled-sheet', text: 'still running', isError: false };
     return { base64: fixture.toString('base64'), text: '', isError: false };
   },
@@ -67,8 +75,8 @@ const vite = await createServer({
 await vite.listen();
 const base = `http://127.0.0.1:${vite.httpServer.address().port}`;
 
-async function request(method, body, expected = 200) {
-  const response = await fetch(base + '/api/ai-slice-sheet', {
+async function request(method, body, expected = 200, route = '/api/ai-slice-sheet') {
+  const response = await fetch(base + route, {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -98,9 +106,28 @@ try {
   await request('POST', { ...valid, reference: 'not-an-image' }, 502);
   await request('POST', { ...valid, size: '12 by 8' }, 502);
 
+  mode = 'immediate';
+  expectedKind = 'plate';
+  const plateBody = { reference: valid.reference, prompt: 'Repair only this asset and remove its text' };
+  assert.equal((await request('POST', plateBody, 200, '/api/plate')).dataUrl, immediate.dataUrl);
+  const context = await sharp({ create: { width: 16, height: 12, channels: 3, background: '#abcdef' } }).jpeg().toBuffer();
+  expectedReferences = 2;
+  await request('POST', { ...plateBody, contextReference: `data:image/jpeg;base64,${context.toString('base64')}` }, 200, '/api/plate');
+  assert.equal(calls, 4, 'one target plus optional local context reaches only the controlled provider');
+  for (const body of [
+    { ...plateBody, reference: 'not-an-image' },
+    { ...plateBody, reference: 'data:image/png;base64,YmFk' },
+    { ...plateBody, reference: undefined },
+    { ...plateBody, contextReference: 'data:image/png;base64,YmFk' },
+    { ...plateBody, contextReference: 42 },
+    { ...plateBody, prompt: 'x'.repeat(12_001) },
+  ]) await request('POST', body, 502, '/api/plate');
+  assert.equal(calls, 4, 'invalid target/context must be rejected before model access');
+
   console.log(JSON.stringify({
     passed: true,
-    checks: ['transparent-background', 'reference-normalization', 'pending-result', 'method-and-input-validation'],
+    checks: ['transparent-background', 'reference-normalization', 'pending-result', 'method-and-input-validation',
+      'plate-target-and-local-context', 'plate-reference-validation-before-provider'],
     evidence: directory,
   }));
 } finally {

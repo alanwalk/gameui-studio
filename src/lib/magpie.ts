@@ -6,8 +6,11 @@ import type {
   Project,
   Rect,
   Style,
+  TextPolicy,
 } from '../types';
 import { kindLabel } from './layout';
+import { buildAssetRepairPrompt } from './assetPrompts';
+import { analyzeAlphaSheetPixels } from './alphaComponents';
 
 /**
  * Magpie-backed model access. Every call goes to the dev server's /api/* middleware,
@@ -42,14 +45,15 @@ export const SYSTEM_PROMPT = `You are a game UI asset analyst. Given a game UI s
 
 Rules:
 - Return ONLY valid JSON. No markdown fences, no commentary.
-- Schema: {"elements": [{"label": string, "kind": string, "x": number, "y": number, "w": number, "h": number, "layer": number, "description": string, "text": string|null}]}
+- Schema: {"elements": [{"label": string, "kind": string, "x": number, "y": number, "w": number, "h": number, "layer": number, "description": string, "text": string|null, "textPolicy": "separate"|"preserve"}]}
 - kind must be one of: ${KINDS.join(', ')}.
 - Coordinates are in ORIGINAL image pixels, integers, relative to the top-left corner.
-- Use a TIGHT bounding box around each element's visible art. Do not pad. Do not include shadow bleed unless it is part of the shape.
+- Include the complete visible silhouette, thin outlines, detached decorations and intentional shadows. The box identifies the target; later segmentation determines the final pixel bounds.
 - "layer": 0 is the bottom-most background. Larger numbers sit on top. Use this to record what visually covers what.
 - "label": short English describing the element, e.g. "ConfirmButton", "WoodPanel", "CoinIcon". Never use words like New, Old, Final, Copy, Temp.
 - "description": one English sentence describing the art, used later to regenerate it. Be specific about shape, material, colour and style.
 - "text": for kind "text", the exact readable string. Otherwise null.
+- "textPolicy": use "separate" for dynamic numbers, levels, counters and UI labels, and "preserve" only for intentional lettering that is part of the artwork.
 
 Coverage rules - these matter most:
 - Exclude OS mouse pointers and transient cursor overlays; they are not reusable UI assets.
@@ -57,6 +61,7 @@ Coverage rules - these matter most:
 - Include distinct reusable static decorative backgrounds, character illustrations, and panel art layers when visible, even if they span the screen. Keep their bounds on the art layer, not the combined screen and UI.
 - Separate each state of a control into its own element when the screenshot shows them side by side.
 - For text: report the text band itself. Developers will render text in-engine, so keep the box on the glyphs.
+- Decompose composite controls into their reusable blank base, icon, button, progress track/fill and text layers. Do not treat a notification dot or neighboring illustration fragment as part of the base.
 - Do NOT invent elements that are not visible. Do NOT merge unrelated elements into one box.
  - Aim for completeness over brevity: 15-40 elements is normal for a full screen.`;
 
@@ -211,6 +216,7 @@ function parseElements(content: string, w: number, h: number): DetectedElement[]
       layer: Math.round(coerceNumber(item.layer)),
       description: String(item.description ?? '').trim(),
       text: item.text ? String(item.text) : undefined,
+      textPolicy: item.textPolicy === 'preserve' ? 'preserve' : 'separate',
     });
   }
 
@@ -366,23 +372,19 @@ export async function fetchModels(): Promise<string[]> {
   return payload.models ?? [];
 }
 
-/** Returns a data URL of a transparent PNG, already sized to the target box. */
+/** Returns the provider's transparent PNG; fitToBox handles its foreground size. */
 export async function generateCleanPlate(req: {
   element: DetectedElement;
   referenceDataUrl: string;
+  contextDataUrl?: string;
+  textPolicy?: TextPolicy;
 }): Promise<string> {
-  const prompt = [
-    `Redraw ONLY this single game UI asset: ${req.element.label}.`,
-    `Art description: ${req.element.description || 'game UI element'}.`,
-    'Render it complete and unoccluded, as if nothing overlapped it.',
-    'Preserve the same visual style, palette, lighting and scale as the reference image.',
-    'No text unless the asset is a text badge.',
-    'The asset must be centred and fill the frame, with nothing else in the image.',
-  ].join(' ');
+  const prompt = buildAssetRepairPrompt(req.element, req.textPolicy ?? req.element.textPolicy ?? 'separate');
 
   const payload = await postJson<{ dataUrl: string }>('/api/plate', {
     prompt,
     reference: req.referenceDataUrl,
+    contextReference: req.contextDataUrl,
   });
 
   return payload.dataUrl;
@@ -408,7 +410,13 @@ export async function generateAiSliceSheet(req: {
  * at its own resolution, so the asset has to come back at the size the layout expects
  * or it will not line up with the rest of the page.
  */
-export async function fitToBox(dataUrl: string, w: number, h: number): Promise<string> {
+export async function fitToBox(dataUrl: string, w: number, h: number): Promise<{
+  dataUrl: string;
+  warnings: string[];
+}> {
+  if (![w, h].every((value) => Number.isSafeInteger(value) && value > 0)) {
+    throw new Error('补图目标尺寸无效');
+  }
   const image = new Image();
   image.src = dataUrl;
   await image.decode();
@@ -418,10 +426,35 @@ export async function fitToBox(dataUrl: string, w: number, h: number): Promise<s
   canvas.height = h;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('无法创建 2D 画布上下文');
+  const sourceCanvas = document.createElement('canvas');
+  sourceCanvas.width = image.naturalWidth;
+  sourceCanvas.height = image.naturalHeight;
+  const sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
+  if (!sourceContext) throw new Error('无法读取补图前景');
+  sourceContext.drawImage(image, 0, 0);
+  const pixels = sourceContext.getImageData(0, 0, image.naturalWidth, image.naturalHeight).data;
+  // Use the same support-aware ownership as sheet extraction. A distant alpha-1
+  // speck must not expand the crop to a square, while attached soft tails survive.
+  const { components, diagnostics } = analyzeAlphaSheetPixels(pixels, image.naturalWidth, image.naturalHeight);
+  if (components.length !== 1) {
+    throw new Error(`补图结果包含 ${components.length} 个独立主体，请检查后重新生成单个素材`);
+  }
+  const component = components[0];
+  const foregroundWidth = component.rect.w;
+  const foregroundHeight = component.rect.h;
+  sourceCanvas.width = foregroundWidth;
+  sourceCanvas.height = foregroundHeight;
+  sourceContext.putImageData(new ImageData(component.rgba, foregroundWidth, foregroundHeight), 0, 0);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(image, 0, 0, w, h);
-  return canvas.toDataURL('image/png');
+  const scale = Math.min(w / foregroundWidth, h / foregroundHeight);
+  const fittedWidth = Math.max(1, Math.round(foregroundWidth * scale));
+  const fittedHeight = Math.max(1, Math.round(foregroundHeight * scale));
+  ctx.drawImage(sourceCanvas, Math.floor((w - fittedWidth) / 2), Math.floor((h - fittedHeight) / 2), fittedWidth, fittedHeight);
+  const warnings = diagnostics.ungroupedPixelCount > 0
+    ? [`补图中排除了 ${diagnostics.ungroupedComponentCount} 个孤立低透明度残片（${diagnostics.ungroupedPixelCount} 像素），请复查轮廓。`]
+    : [];
+  return { dataUrl: canvas.toDataURL('image/png'), warnings };
 }
 
 /**

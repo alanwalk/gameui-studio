@@ -4,9 +4,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readImage } from './store';
+import { isSegmentationDiagnostics, type SegmentationDiagnostics } from '../src/lib/segmentationTypes';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const PYTHON = path.join(ROOT, '.venv-seg/Scripts/python.exe');
+const PYTHON = path.join(ROOT, process.platform === 'win32' ? '.venv-seg/Scripts/python.exe' : '.venv-seg/bin/python');
 const SCRIPT = path.join(ROOT, 'scripts/segment.py');
 const SAM2_ROOT = path.join(ROOT, '.data/segmentation/sam2');
 const WEIGHTS = path.join(SAM2_ROOT, 'sam2.1_hiera_small.pt');
@@ -29,7 +30,8 @@ type SegmentRequest = {
   points?: Point[];
   kind?: ElementKind;
 };
-type SegmentResult = {
+type SegmentResult = SegmentationDiagnostics & {
+  protocolVersion: 2;
   width: number;
   height: number;
   maskBase64: string;
@@ -42,7 +44,7 @@ type SegmentResult = {
 };
 
 function coordinate(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_COORD;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= MAX_COORD;
 }
 
 function isElementKind(value: unknown): value is ElementKind {
@@ -59,7 +61,7 @@ function validateRequest(value: unknown): SegmentRequest {
   const rect = body.rect;
   if (!rect || ![rect.x, rect.y, rect.w, rect.h].every(coordinate) || rect.w <= 0 || rect.h <= 0 ||
       rect.x + rect.w > MAX_COORD || rect.y + rect.h > MAX_COORD) {
-    throw new SegmentationError(400, 'rect 必须包含有限的非负坐标和正数 w/h，坐标上限 100000');
+    throw new SegmentationError(400, 'rect 必须包含非负整数坐标和正整数 w/h，坐标上限 100000');
   }
   if (body.points !== undefined && (!Array.isArray(body.points) || body.points.length > 256 || body.points.some(
     (point) => !point || !coordinate(point.x) || !coordinate(point.y) || (point.label !== 0 && point.label !== 1),
@@ -190,14 +192,19 @@ async function segment(value: unknown): Promise<SegmentResult> {
   const result = await runPython([
     SCRIPT, '--checkpoint', WEIGHTS, '--site', SITE, '--source', SOURCE, '--config', CONFIG,
   ], JSON.stringify(request), 120_000) as SegmentResult;
-  if (!result || !Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width <= 0 || result.height <= 0 ||
+  if (!result || result.protocolVersion !== 2 || !Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width <= 0 || result.height <= 0 ||
       result.width * result.height > 64_000_000 || !Number.isFinite(result.score) || !Number.isFinite(result.elapsedMs) || result.elapsedMs < 0 ||
       typeof result.model !== 'string' || !result.model || result.model.length > 128 ||
       !pngDimensions(request.imageBase64, result.width, result.height) ||
       !pngDimensions(result.maskBase64, result.width, result.height) || !pngDimensions(result.rgbaBase64, result.width, result.height)) {
     throw new SegmentationError(502, '分割响应协议无效：需要全原图尺寸的 mask/RGBA PNG 和有效元数据');
   }
+  if (!isSegmentationDiagnostics(result, result.width, result.height) ||
+      result.promptBounds.some((value, index) => value !== request.bbox[index])) {
+    throw new SegmentationError(502, '分割响应几何或精修诊断无效：提示框、推理区域与输出框必须是原图内的有效整数边界');
+  }
   return {
+    protocolVersion: 2,
     width: result.width,
     height: result.height,
     maskBase64: result.maskBase64,
@@ -207,6 +214,12 @@ async function segment(value: unknown): Promise<SegmentResult> {
     model: result.model,
     chosenIndex: result.chosenIndex,
     candidates: result.candidates,
+    promptBounds: result.promptBounds,
+    inferenceBounds: result.inferenceBounds,
+    maskBounds: result.maskBounds,
+    outputBounds: result.outputBounds,
+    quality: result.quality,
+    refinement: result.refinement,
   };
 }
 
