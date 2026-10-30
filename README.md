@@ -41,6 +41,21 @@ AI 拆图会生成新的透明组件表，适合制作去字底板与独立控�
 
 精修不可用时会明确显示降级原因并保留粗蒙版；两条路径的新结果均需审核。安装、Linux / Windows 命令和验证边界见[素材质量与验证](docs/asset-quality.md)。
 
+## 命令行 / Agent 调用
+
+无需打开浏览器即可调用上传、画风分析、线稿、效果图、SAM 分割和素材导出；透明图集拆分可以完全离线运行。
+
+```sh
+npm run cli -- help
+npm run cli -- serve --port 5174
+# 另一个终端：
+npm run --silent cli -- health --url http://127.0.0.1:5174 --json
+npm run cli -- slice-sheet --input sheet.png --out output-assets --zip
+npm run check:cli
+```
+
+`--json` 支持脚本读取结果与退出码。`ai-sheet` 明确表示 AI 重绘；`slice-sheet` 只运行共享切图算法。AI 步骤还支持 `--dry-run` 导出请求计划和 `--response` 导入外部模型结果，不要求测试时连接 Magpie。命令、完整工作流与验证范围见 [CLI 使用说明](docs/cli.md)。
+
 ## 开发
 
 ```powershell
