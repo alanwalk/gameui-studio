@@ -1,4 +1,5 @@
 import type { LayoutKind, LayoutNode } from '../types';
+import { createUuid } from './uuid';
 
 type TemplateNode = Omit<LayoutNode, 'id'>;
 const block = (name: string, kind: LayoutKind, x: number, y: number, w: number, h: number): TemplateNode => ({
@@ -40,5 +41,5 @@ export const LAYOUT_TEMPLATES: { id: string; name: string; nodes: TemplateNode[]
 export function createTemplateLayout(templateId: string): LayoutNode[] {
   const template = LAYOUT_TEMPLATES.find((entry) => entry.id === templateId);
   if (!template) throw new Error('未知布局模板');
-  return template.nodes.map((node) => ({ ...node, id: `layout-${crypto.randomUUID()}`, rect: { ...node.rect } }));
+  return template.nodes.map((node) => ({ ...node, id: `layout-${createUuid()}`, rect: { ...node.rect } }));
 }

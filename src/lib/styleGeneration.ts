@@ -1,4 +1,5 @@
 import type { DrawingState, DrawingTask } from './drawingTypes';
+import { createUuid } from './uuid';
 
 export type StyleDraft = {
   id: string;
@@ -17,7 +18,7 @@ export type StyleDraft = {
 export const STYLE_DRAFT_KEY = 'gameui-style-generation-v1';
 
 export function newStyleDraft(source?: string): StyleDraft {
-  return { id: crypto.randomUUID(), source, description: '', referenceImages: source ? [source] : [] };
+  return { id: createUuid(), source, description: '', referenceImages: source ? [source] : [] };
 }
 
 export function loadStyleDraft(source?: string): StyleDraft {

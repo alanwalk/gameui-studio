@@ -12,6 +12,7 @@ import type { SegmentationPoint } from '../lib/segmentation';
 import { MaskEditor } from './MaskEditor';
 import { arrangeAssets } from '../lib/assetAtlas';
 import { PanZoomSurface } from './PanZoomSurface';
+import { createUuid } from '../lib/uuid';
 
 const methodLabels = {
   'color-key': '原图色键（非精准分割）',
@@ -177,7 +178,7 @@ export function SlicePreview({
       updatedElement = { ...selected, objectName: objectName.trim(), state: state.trim(), rect: { ...rect } };
     } else {
       updatedElement = {
-        id: `manual-${crypto.randomUUID()}`, label: objectName.trim(), objectName: objectName.trim(), state: state.trim(),
+        id: `manual-${createUuid()}`, label: objectName.trim(), objectName: objectName.trim(), state: state.trim(),
         rect: { ...rect }, kind: 'icon', description: '人工框选素材', layer: Math.max(0, ...elements.map((element) => element.layer)) + 1,
         occluded: false, needsAi: false, approved: true,
       };

@@ -8,6 +8,7 @@ import { SlicePanel } from './SlicePanel';
 import { PanZoomSurface } from './PanZoomSurface';
 import { StudioDialog } from './StudioDialog';
 import { ToastQueue } from './ToastQueue';
+import { createUuid } from '../lib/uuid';
 
 const DEFAULT_AI_SLICE_PROMPT = [
   '将这张游戏 UI 截图中的所有可复用物件拆分为独立组件。',
@@ -119,7 +120,7 @@ export function AssetsStage({screenName,version,busy,onImport,panelProps,exportS
     }
 
     const element: UiElement = {
-      id: `manual-${crypto.randomUUID()}`,
+      id: `manual-${createUuid()}`,
       label: objectName,
       objectName,
       state: 'Normal',

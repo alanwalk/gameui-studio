@@ -1,5 +1,6 @@
 import type { BorderReport, ElementKind, Rect, UiElement } from '../types';
 import { loadImageElement } from './image';
+import { createUuid } from './uuid';
 
 const ALPHA_THRESHOLD = 8;
 const MIN_COMPONENT_PIXELS = 24;
@@ -152,7 +153,7 @@ export async function sliceAlphaSheet(dataUrl: string): Promise<{ width: number;
     context.drawImage(source, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
     const number = String(index + 1).padStart(2, '0');
     return {
-      id: `ai-sheet-${crypto.randomUUID()}`,
+      id: `ai-sheet-${createUuid()}`,
       rect,
       kind: inferKind(rect.w, rect.h),
       label: `AI组件${number}`,

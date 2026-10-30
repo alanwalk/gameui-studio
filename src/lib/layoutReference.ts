@@ -1,5 +1,6 @@
 import { detectElements } from './magpie.ts';
 import type { DetectedElement, LayoutKind, LayoutNode } from '../types';
+import { createUuid } from './uuid';
 
 export const DEFAULT_LAYOUT_VISION_MODEL = 'codex/gpt-6.1-terra';
 export type LayoutReferencePreview = { nodes: LayoutNode[]; sourceImage: string; width: number; height: number };
@@ -23,7 +24,7 @@ export function referenceElementsToLayout(elements: DetectedElement[], width: nu
     else if (element.kind === 'decor') kind = 'image';
     else kind = element.kind;
     return {
-      id: `reference-${crypto.randomUUID()}`, name: element.label, kind,
+      id: `reference-${createUuid()}`, name: element.label, kind,
       rect: { x: left / width, y: top / height, w: (right - left) / width, h: (bottom - top) / height },
       text: element.text,
     };

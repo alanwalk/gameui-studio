@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SliceTask, SliceTaskSource, StoredSliceElement, UiElement } from '../types';
 import { imageUrl } from './magpie';
 import { plateOccluded } from './pipeline';
+import { createUuid } from './uuid';
 
 export type SliceSourceImage = { dataUrl: string; width: number; height: number };
 
@@ -12,7 +13,7 @@ export function sourceKey(source: SliceTaskSource | null): string {
 }
 export function newSliceTask(source: SliceTaskSource, name: string, width: number, height: number): SliceTask {
   const now = Date.now();
-  return { schemaVersion: 1, id: crypto.randomUUID(), name, source, width, height, elements: [], status: 'idle', createdAt: now, updatedAt: now };
+  return { schemaVersion: 1, id: createUuid(), name, source, width, height, elements: [], status: 'idle', createdAt: now, updatedAt: now };
 }
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
@@ -314,7 +315,7 @@ export async function extractSliceTask(
           matched.add(match.id);
           continue;
         }
-        const id = current.some((existing) => existing.id === element.id) ? crypto.randomUUID() : element.id;
+        const id = current.some((existing) => existing.id === element.id) ? createUuid() : element.id;
         current.push({ ...element, id });
         matched.add(id);
       }

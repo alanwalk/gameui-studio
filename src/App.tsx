@@ -55,6 +55,7 @@ import { findMatchingStyle } from './lib/styles';
 import type { SliceTaskSource } from './types';
 import { extractSliceTask, newSliceTask, repaintTask, useSliceTasks } from './lib/sliceTasks';
 import type { LayoutKind, LayoutNode, Project, Screen, ScreenVersion, Settings, Style } from './types';
+import { createUuid } from './lib/uuid';
 
 const DEFAULT_SETTINGS: Settings = {
   visionModel: 'codex/gpt-6.1-terra',
@@ -749,7 +750,7 @@ export default function App() {
     try {
       const source = await loadImageElement(imageUrl(sourceImage));
       await startProjectRender({
-        id: `v-${crypto.randomUUID()}`, projectId, screenId, operation: 'refine',
+        id: `v-${createUuid()}`, projectId, screenId, operation: 'refine',
         sourceVersionId: sourceVersion.id, sourceImage, prompt, styleSnapshot,
         size: `${source.naturalWidth}x${source.naturalHeight}`,
       });
@@ -779,7 +780,7 @@ export default function App() {
       const wire = renderWireframe(targetScreen.layout, genW, genH);
 
       await startProjectRender({
-        id: `v-${crypto.randomUUID()}`, projectId: activeProject.id, screenId: targetScreen.id,
+        id: `v-${createUuid()}`, projectId: activeProject.id, screenId: targetScreen.id,
         operation: 'generate', styleSnapshot,
         prompt: buildGenerationPrompt(activeProject, targetScreen),
         wireframe: wire.toDataURL('image/png'),
@@ -928,7 +929,7 @@ export default function App() {
         if (!payload.fileName) throw new Error('导入未返回已保存的图片');
         const version: ScreenVersion = {
           operation: 'import', styleSnapshot, name: file.name,
-          id: `v-${crypto.randomUUID()}`,
+          id: `v-${createUuid()}`,
           image: payload.fileName,
           prompt: '导入的结果图',
           createdAt: Date.now(),
@@ -1079,7 +1080,7 @@ export default function App() {
           setRenderTasks((tasks) => tasks.map((entry) => entry.id === resumed.id ? resumed : entry));
         }))}>继续等待</button>}
         {(task.status === 'interrupted' || task.status === 'failed') && <button disabled={busy} onClick={() => {
-          setRetryRequest({task, versionId: `v-${crypto.randomUUID()}`});
+          setRetryRequest({task, versionId: `v-${createUuid()}`});
           setError(null);
         }}>重新生成</button>}</div>
       </div>)}

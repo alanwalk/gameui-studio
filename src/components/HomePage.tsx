@@ -6,6 +6,7 @@ import { StudioDialog } from './StudioDialog';
 import { ToastQueue } from './ToastQueue';
 import { StyleDetails } from './StyleDetails';
 import { StyleLibrary } from './StyleLibrary';
+import { createUuid } from '../lib/uuid';
 
 type Props = {
   projects: Project[];
@@ -70,7 +71,7 @@ export function HomePage(props: Props) {
     try {
       if (action === 'copy') {
         const now = Date.now();
-        const copy: Style = {...structuredClone(style), id: `style-${crypto.randomUUID()}`, name: `${style.name} 副本`, createdAt: now, updatedAt: now};
+        const copy: Style = {...structuredClone(style), id: `style-${createUuid()}`, name: `${style.name} 副本`, createdAt: now, updatedAt: now};
         await props.onCreateStyle(copy);
         setNotice(`已复制画风「${style.name}」`);
       } else {
