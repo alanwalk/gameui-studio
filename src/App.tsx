@@ -53,7 +53,7 @@ import {
 import { buildZip, downloadBlob } from './lib/export';
 import { findMatchingStyle } from './lib/styles';
 import type { SliceTaskSource } from './types';
-import { extractSliceTask, newSliceTask, repaintTask, useSliceTasks } from './lib/sliceTasks';
+import { extractSliceTask, newSliceTask, repaintTask, uploadSliceImage, useSliceTasks } from './lib/sliceTasks';
 import type { LayoutKind, LayoutNode, Project, Screen, ScreenVersion, Settings, Style } from './types';
 import { createUuid } from './lib/uuid';
 
@@ -957,7 +957,13 @@ export default function App() {
       setVersionBusy(true);
       setError(null);
       try {
-        const { width, height, elements } = await sliceAlphaSheet(dataUrl);
+        const { width, height, elements, diagnostics } = await sliceAlphaSheet(dataUrl);
+        const sourceSheetImage = await uploadSliceImage(dataUrl);
+        const generatedElements = elements.map((element) => ({
+          ...element,
+          sourceSheetImage,
+          qualityWarnings: diagnostics.warnings,
+        }));
         let source = sliceSource;
         if (!source) {
           const image = new Image();
@@ -977,10 +983,10 @@ export default function App() {
           source.width,
           source.height,
         );
-        const merged = [...sliceElements ?? [], ...elements];
+        const merged = [...sliceElements ?? [], ...generatedElements];
         await sliceSession.save(task, merged);
         if (sliceSession.isCurrent(projectSource)) {
-          setSliceProgress(`AI 拆图完成：拆出 ${elements.length} 个组件，已写入当前素材任务`);
+          setSliceProgress(`AI 拆图完成：${elements.length} 个组件待审核${diagnostics.warnings.length ? '，检测到需检查的碎片；原始组件表已保留' : ''}`);
           setStatus(`AI 拆图完成：${elements.length} 个组件，来源画布 ${width}×${height}，要求：${prompt}`);
         }
       } finally {

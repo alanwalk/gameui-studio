@@ -168,13 +168,23 @@ async function fileToDataUrl(filePath: string): Promise<string> {
 }
 
 async function handlePlate(body: JsonBody): Promise<unknown> {
-  const prompt = typeof body.prompt === 'string' ? body.prompt : '';
+  const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
   if (!prompt) throw new Error('缺少 prompt');
+  if (prompt.length > 12_000) throw new Error('补图要求不能超过 12000 字符');
 
   const references: string[] = [];
-  if (typeof body.reference === 'string' && body.reference) {
-    references.push(await writeReference(body.reference, 'source.png'));
+  async function addReference(dataUrl: unknown, name: string) {
+    if (typeof dataUrl !== 'string' || !/^data:image\/(png|jpeg|webp);base64,/.test(dataUrl)) {
+      throw new Error('缺少有效的补图参考图片');
+    }
+    const image = await decodeImage(Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64'), {
+      maxPixels: 40_000_000,
+      maxBytes: 20 * 1024 * 1024,
+    });
+    references.push(await writeReference(`data:image/png;base64,${image.png.toString('base64')}`, name));
   }
+  await addReference(body.reference, 'source.png');
+  if (body.contextReference !== undefined) await addReference(body.contextReference, 'context.png');
 
   const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gameui-out-'));
 

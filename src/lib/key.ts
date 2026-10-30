@@ -47,22 +47,62 @@ function readPixel(src: ImageData, x: number, y: number): [number, number, numbe
   return [src.data[i], src.data[i + 1], src.data[i + 2]];
 }
 
+type BackgroundSample = {
+  color: [number, number, number];
+  visiblePixels: number;
+  opaquePixels: number;
+  transparentPixels: number;
+};
+
+function backgroundSampler(src: ImageData) {
+  const red: number[] = [];
+  const green: number[] = [];
+  const blue: number[] = [];
+  const opaqueRed: number[] = [];
+  const opaqueGreen: number[] = [];
+  const opaqueBlue: number[] = [];
+  let transparentPixels = 0;
+  return {
+    push(x: number, y: number) {
+      const alpha = src.data[(y * src.width + x) * 4 + 3];
+      if (alpha === 0) {
+        transparentPixels++;
+        return;
+      }
+      const [r, g, b] = readPixel(src, x, y);
+      red.push(r);
+      green.push(g);
+      blue.push(b);
+      if (alpha === 255) {
+        opaqueRed.push(r);
+        opaqueGreen.push(g);
+        opaqueBlue.push(b);
+      }
+    },
+    result(): BackgroundSample {
+      return {
+        color: opaqueRed.length > 0
+          ? [median(opaqueRed), median(opaqueGreen), median(opaqueBlue)]
+          : [median(red), median(green), median(blue)],
+        visiblePixels: red.length,
+        opaquePixels: opaqueRed.length,
+        transparentPixels,
+      };
+    },
+  };
+}
+
 /**
  * Median colour of the outer ring around `rect`. Sampling the surroundings (not the
  * element interior) is what keeps a bright element from poisoning its own key colour.
  */
 export function sampleBackgroundColor(src: ImageData, rect: Rect): [number, number, number] {
-  const r: number[] = [];
-  const g: number[] = [];
-  const b: number[] = [];
-  const pad = Math.max(2, Math.round(Math.min(rect.w, rect.h) * 0.04));
+  return sampleBackground(src, rect).color;
+}
 
-  const push = (x: number, y: number) => {
-    const [pr, pg, pb] = readPixel(src, x, y);
-    r.push(pr);
-    g.push(pg);
-    b.push(pb);
-  };
+function sampleBackground(src: ImageData, rect: Rect): BackgroundSample {
+  const sampler = backgroundSampler(src);
+  const pad = Math.max(2, Math.round(Math.min(rect.w, rect.h) * 0.04));
 
   for (let d = 1; d <= pad; d++) {
     const top = rect.y - d;
@@ -71,58 +111,45 @@ export function sampleBackgroundColor(src: ImageData, rect: Rect): [number, numb
     const right = rect.x + rect.w - 1 + d;
     if (top >= 0) {
       for (let x = rect.x; x < rect.x + rect.w; x++) {
-        if (x >= 0 && x < src.width) push(x, top);
+        if (x >= 0 && x < src.width) sampler.push(x, top);
       }
     }
     if (bottom < src.height) {
       for (let x = rect.x; x < rect.x + rect.w; x++) {
-        if (x >= 0 && x < src.width) push(x, bottom);
+        if (x >= 0 && x < src.width) sampler.push(x, bottom);
       }
     }
     if (left >= 0) {
       for (let y = rect.y; y < rect.y + rect.h; y++) {
-        if (y >= 0 && y < src.height) push(left, y);
+        if (y >= 0 && y < src.height) sampler.push(left, y);
       }
     }
     if (right < src.width) {
       for (let y = rect.y; y < rect.y + rect.h; y++) {
-        if (y >= 0 && y < src.height) push(right, y);
+        if (y >= 0 && y < src.height) sampler.push(right, y);
       }
     }
   }
 
-  if (r.length === 0) {
+  const sample = sampler.result();
+  if (sample.visiblePixels === 0 && sample.transparentPixels === 0) {
     // Element fills the whole image; fall back to the crop's own outer ring.
     return sampleRingOfCrop(src, rect);
   }
-  return [median(r), median(g), median(b)];
+  return sample;
 }
 
-function sampleRingOfCrop(src: ImageData, rect: Rect): [number, number, number] {
-  const r: number[] = [];
-  const g: number[] = [];
-  const b: number[] = [];
+function sampleRingOfCrop(src: ImageData, rect: Rect): BackgroundSample {
+  const sampler = backgroundSampler(src);
   for (let x = rect.x; x < rect.x + rect.w; x++) {
-    let [pr, pg, pb] = readPixel(src, x, rect.y);
-    r.push(pr);
-    g.push(pg);
-    b.push(pb);
-    [pr, pg, pb] = readPixel(src, x, rect.y + rect.h - 1);
-    r.push(pr);
-    g.push(pg);
-    b.push(pb);
+    sampler.push(x, rect.y);
+    sampler.push(x, rect.y + rect.h - 1);
   }
   for (let y = rect.y; y < rect.y + rect.h; y++) {
-    let [pr, pg, pb] = readPixel(src, rect.x, y);
-    r.push(pr);
-    g.push(pg);
-    b.push(pb);
-    [pr, pg, pb] = readPixel(src, rect.x + rect.w - 1, y);
-    r.push(pr);
-    g.push(pg);
-    b.push(pb);
+    sampler.push(rect.x, y);
+    sampler.push(rect.x + rect.w - 1, y);
   }
-  return [median(r), median(g), median(b)];
+  return sampler.result();
 }
 
 /**
@@ -146,8 +173,12 @@ function floodBackground(
     const idx = y * w + x;
     if (isBg[idx]) return;
     const p = idx * 4;
-    const d = colorDistance(rgb[p], rgb[p + 1], rgb[p + 2], bg[0], bg[1], bg[2]);
-    if (d > threshold) return;
+    // Transparent RGB is undefined image data. It must neither obstruct a fill
+    // nor become evidence for a different key colour.
+    if (rgb[p + 3] > 0) {
+      const distance = colorDistance(rgb[p], rgb[p + 1], rgb[p + 2], bg[0], bg[1], bg[2]);
+      if (distance > threshold) return;
+    }
     isBg[idx] = 1;
     queue[tail++] = idx;
   };
@@ -166,20 +197,10 @@ function floodBackground(
     const x = idx % w;
     const y = (idx - x) / w;
 
-    if (x > 0) seedStep(x - 1, y);
-    if (x < w - 1) seedStep(x + 1, y);
-    if (y > 0) seedStep(x, y - 1);
-    if (y < h - 1) seedStep(x, y + 1);
-  }
-
-  function seedStep(nx: number, ny: number) {
-    const nidx = ny * w + nx;
-    if (isBg[nidx]) return;
-    const p = nidx * 4;
-    const d = colorDistance(rgb[p], rgb[p + 1], rgb[p + 2], bg[0], bg[1], bg[2]);
-    if (d > threshold) return;
-    isBg[nidx] = 1;
-    queue[tail++] = nidx;
+    if (x > 0) seed(x - 1, y);
+    if (x < w - 1) seed(x + 1, y);
+    if (y > 0) seed(x, y - 1);
+    if (y < h - 1) seed(x, y + 1);
   }
 
   return isBg;
@@ -199,7 +220,9 @@ function fringeFix(
     for (let x = 0; x < w; x++) {
       const idx = y * w + x;
       const a = alpha[idx];
-      if (a <= 0.001 || a >= 0.9) continue;
+      // Native semi-transparent pixels already store foreground RGB. Replacing
+      // their colour with an opaque neighbour destroys authored glows and edges.
+      if (a <= 0.001 || a >= 0.9 || rgb[idx * 4 + 3] < 255) continue;
 
       let sr = 0;
       let sg = 0;
@@ -211,7 +234,7 @@ function fringeFix(
           const ny = y + dy;
           if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
           const nidx = ny * w + nx;
-          if (alpha[nidx] < 0.9) continue;
+          if (alpha[nidx] < 0.9 || rgb[nidx * 4 + 3] < 230) continue;
           const p = nidx * 4;
           sr += rgb[p];
           sg += rgb[p + 1];
@@ -274,11 +297,13 @@ function bandMean(
         y = rect.y + i;
       }
       if (x < 0 || y < 0 || x >= src.width || y >= src.height) continue;
+      const opacity = src.data[(y * src.width + x) * 4 + 3] / 255;
+      if (opacity === 0) continue;
       const [r, g, b] = readPixel(src, x, y);
-      sr += r;
-      sg += g;
-      sb += b;
-      count++;
+      sr += r * opacity;
+      sg += g * opacity;
+      sb += b * opacity;
+      count += opacity;
     }
   }
 
@@ -309,22 +334,34 @@ export function keyElement(
       rgb[d] = src.data[s];
       rgb[d + 1] = src.data[s + 1];
       rgb[d + 2] = src.data[s + 2];
-      rgb[d + 3] = 255;
+      rgb[d + 3] = src.data[s + 3];
     }
   }
 
-  const bg = sampleBackgroundColor(src, rect);
+  const background = sampleBackground(src, rect);
+  const bg = background.color;
+  // With an existing transparent exterior there is no painted backdrop to key.
+  // Sampling the artwork itself would erase legitimate dark outlines/highlights.
+  const sampledPixels = background.visiblePixels + background.transparentPixels;
+  const transparentExterior = sampledPixels > 0 && background.transparentPixels / sampledPixels >= 0.5;
+  if (background.opaquePixels === 0 || transparentExterior) {
+    return { width: w, height: h, rgba: rgb, bgColor: bg };
+  }
   const tol01 = options.tolerance / 100;
   const soft01 = Math.max(options.softness / 100, 0.0001);
   const isBg = floodBackground(w, h, rgb, bg, tol01 + soft01);
 
   const alpha = new Float32Array(w * h);
   for (let idx = 0; idx < w * h; idx++) {
+    const p = idx * 4;
+    if (rgb[p + 3] === 0) {
+      alpha[idx] = 0;
+      continue;
+    }
     if (!isBg[idx]) {
       alpha[idx] = 1;
       continue;
     }
-    const p = idx * 4;
     const d = colorDistance(rgb[p], rgb[p + 1], rgb[p + 2], bg[0], bg[1], bg[2]);
     if (d <= tol01) {
       alpha[idx] = 0;
@@ -345,7 +382,7 @@ export function keyElement(
     rgba[p] = rgb[p];
     rgba[p + 1] = rgb[p + 1];
     rgba[p + 2] = rgb[p + 2];
-    rgba[p + 3] = Math.round(alpha[idx] * 255);
+    rgba[p + 3] = Math.round(alpha[idx] * rgb[p + 3]);
   }
 
   return { width: w, height: h, rgba, bgColor: bg };

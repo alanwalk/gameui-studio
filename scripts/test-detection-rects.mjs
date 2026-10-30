@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { detectElements } from '../src/lib/magpie.ts';
+import { build } from 'esbuild';
+
+// Bundle the actual module so Node does not depend on platform-specific extension resolution.
+const moduleBuild = await build({ entryPoints: ['src/lib/magpie.ts'], bundle: true, write: false, platform: 'node', format: 'esm' });
+const { detectElements } = await import(`data:text/javascript;base64,${Buffer.from(moduleBuild.outputFiles[0].contents).toString('base64')}`);
 
 const request = { dataUrl: 'data:image/png;base64,mock', width: 800, height: 600, model: 'mock' };
 const button = { label: 'ConfirmButton', kind: 'button', x: 20, y: 30, w: 40, h: 50, layer: 1 };

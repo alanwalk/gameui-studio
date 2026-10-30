@@ -99,7 +99,12 @@ async function runTests() {
     const canvas = () => ({ width: 1, height: 1, toDataURL() { uploads++; return png; }, getContext() { return { drawImage() {} }; } });
     globalThis.document = { createElement: () => canvas() };
     globalThis.Image = class { async decode() {} };
-    const element = { id: 'element', label: 'Icon', kind: 'icon', rect: { x: 0, y: 0, w: 1, h: 1 }, description: '', objectName: 'Icon', state: 'Normal', layer: 2, occluded: false, needsAi: false, approved: false, extractionMethod: 'manual', repainted: true, processingStatus: 'running', maskImage: sourceImage, slice: { width: 1, height: 1, canvas: canvas(), border: { bgColor: [0, 0, 0], sideScore: { top: 0, right: 0, bottom: 0, left: 0 }, dirtySides: [] } } };
+    const diagnostics = {
+      promptBounds: [0, 0, 1, 1], inferenceBounds: [0, 0, 1, 1], maskBounds: [0, 0, 1, 1], outputBounds: [0, 0, 1, 1],
+      quality: { status: 'review', issues: [], removedComponents: 0, removedPixels: 0, retainedComponents: 1 },
+      refinement: { method: 'source-alpha', status: 'preserved', softAlphaPixels: 0, changedRgbPixels: 0, trimapRadius: 0 },
+    };
+    const element = { id: 'element', label: 'Icon', kind: 'icon', rect: { x: 0, y: 0, w: 1, h: 1 }, description: '', objectName: 'Icon', state: 'Normal', layer: 2, occluded: false, needsAi: false, approved: false, extractionMethod: 'manual', repainted: true, processingStatus: 'running', maskImage: sourceImage, textPolicy: 'preserve', coordinateSpace: 'source', qualityWarnings: ['Check the soft edge'], segmentationDiagnostics: diagnostics, slice: { width: 1, height: 1, canvas: canvas(), border: { bgColor: [0, 0, 0], sideScore: { top: 0, right: 0, bottom: 0, left: 0 }, dirtySides: [] } } };
     const standalone = { ...task('standalone'), source: { kind: 'standalone', sourceImage } };
     const saved = await codec.persistSliceTask(standalone, [element]);
     assert.ok(saved.elements[0].slice.image);
@@ -108,12 +113,20 @@ async function runTests() {
     assert.equal(saved.elements[0].extractionMethod, 'manual');
     assert.equal(saved.elements[0].repainted, true);
     assert.equal(saved.elements[0].maskImage, sourceImage);
+    assert.deepEqual(saved.elements[0].segmentationDiagnostics, diagnostics);
+    assert.equal(saved.elements[0].textPolicy, 'preserve');
     const invalidTasks = [
       { ...saved, width: 1.5 }, { ...saved, height: 0 }, { ...saved, width: Infinity },
       { ...saved, source: { ...saved.source, sourceImage: null } },
       { ...saved, source: { kind: 'project', sourceImage, projectId: 42, screenId: 's', versionId: 'v' } },
       { ...saved, elements: [{ ...saved.elements[0], approved: 'yes' }] },
       { ...saved, elements: [{ ...saved.elements[0], objectName: null }] },
+      { ...saved, elements: [{ ...saved.elements[0], segmentationDiagnostics: {} }] },
+      { ...saved, elements: [{ ...saved.elements[0], segmentationDiagnostics: { ...diagnostics, outputBounds: [0, 0, 2, 1] } }] },
+      { ...saved, elements: [{ ...saved.elements[0], textPolicy: 'unknown' }] },
+      { ...saved, elements: [{ ...saved.elements[0], coordinateSpace: 'unknown' }] },
+      { ...saved, elements: [{ ...saved.elements[0], sourceSheetImage: '../outside.png' }] },
+      { ...saved, elements: [{ ...saved.elements[0], qualityWarnings: [42] }] },
       { ...saved, elements: [{ ...saved.elements[0], rect: { x: 0, y: 0, w: -1, h: 1 } }] },
       { ...saved, elements: [{ ...saved.elements[0], slice: null }] },
       { ...saved, elements: [{ ...saved.elements[0], slice: { ...saved.elements[0].slice, border: undefined } }] },
@@ -141,6 +154,7 @@ async function runTests() {
     const restored = await codec.decodeElements(saved.elements);
     assert.equal(restored[0].processingStatus, 'interrupted');
     assert.equal(restored[0].approved, false);
+    assert.deepEqual(restored[0].segmentationDiagnostics, diagnostics);
     assert.ok(restored[0].slice.canvas);
     await codec.persistSliceTask(standalone, [{ ...element, approved: true }]);
     assert.equal(uploads, 1, 'metadata edit must reuse immutable canvas file');

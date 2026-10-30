@@ -13,7 +13,7 @@ let detections = 0;
 let keyed = 0;
 globalThis.batchPipeline = {
   analyze: async () => { detections++; return detected; },
-  toUiElements: (items, settings) => items.map((item) => ({ ...item, approved: item.kind !== 'text' || settings.includeTextAsImage })),
+  toUiElements: (items) => items.map((item) => ({ ...item, approved: false })),
   sliceAll: (items) => { keyed++; return items.map((item) => ({ ...item, extractionMethod: 'color-key', slice: { canvas: canvas(), width: 2, height: 2, border: {} } })); },
 };
 await build({ stdin: { contents: `export { useSliceTasks, extractSliceTask } from '${entry}';`, resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', outfile: bundle,
@@ -63,7 +63,16 @@ globalThis.fetch = async (url, options) => {
     requests.push(input);
     if (modelBarrier) await modelBarrier;
     if (input.rect.x === failId) return Response.json({ error: 'injected model failure' }, { status: 502 });
-    return Response.json({ width: 8, height: 8, rgbaBase64: 'test', maskBase64: 'test' });
+    const bounds = [input.rect.x, input.rect.y, input.rect.x + input.rect.w, input.rect.y + input.rect.h];
+    return Response.json({
+      protocolVersion: 2, width: 8, height: 8, rgbaBase64: 'test', maskBase64: 'test',
+      promptBounds: bounds, inferenceBounds: [0, 0, 8, 8], maskBounds: bounds, outputBounds: bounds,
+      quality: { status: 'review', issues: [], removedComponents: 0, removedPixels: 0, retainedComponents: 1 },
+      refinement: {
+        method: 'binary-mask', status: 'degraded', reason: 'Controlled fixture does not run matting.',
+        softAlphaPixels: 0, changedRgbPixels: 0, trimapRadius: 0,
+      },
+    });
   }
   if (url === '/api/upload') return Response.json({ fileName: 'saved.png' });
   assert.equal(url, '/api/slice-tasks');

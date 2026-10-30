@@ -88,7 +88,7 @@ async function main() {
     }
   } else if (mode === '--web') {
     // Real browser/Canvas/downloads; only external model providers are controlled.
-    for (const name of ['web-workflows', 'page-export', 'atlas-browser', 'pack-browser', 'drawing-browser', 'style-references', 'ai-slice-browser']) {
+    for (const name of ['asset-repair', 'web-workflows', 'page-export', 'atlas-browser', 'pack-browser', 'drawing-browser', 'style-references', 'ai-slice-browser']) {
       if (!await run(name, [`scripts/test-${name}.mjs`])) return;
     }
   } else if (mode === '--model') {
@@ -102,14 +102,18 @@ async function main() {
     if (!await run('detection-rects', ['--test', 'scripts/test-detection-rects.mjs'])) return;
     const require = createRequire(import.meta.url);
     const esbuild = require.resolve('esbuild/bin/esbuild');
-    for (const name of ['export-check', 'layout-history-check', 'mask-edit-check']) {
+    for (const [name, source] of [
+      ['export-check', 'export-check'], ['layout-history-check', 'layout-history-check'],
+      ['mask-edit-check', 'mask-edit-check'], ['alpha-sheet-quality', 'test-alpha-sheet-quality'],
+      ['layout-tools', 'test-layout-tools'],
+    ]) {
       const bundle = path.join(directory, `${name}.mjs`);
-      if (!await run(`${name}-bundle`, [esbuild, `scripts/${name}.mjs`, '--bundle', '--platform=node', '--format=esm', '--packages=external', `--outfile=${bundle}`, '--log-level=warning'])) return;
+      if (!await run(`${name}-bundle`, [esbuild, `scripts/${source}.mjs`, '--bundle', '--platform=node', '--format=esm', '--packages=external', `--outfile=${bundle}`, '--log-level=warning'])) return;
       if (!await run(name, [bundle])) return;
     }
     if (!await run('stage3-batch', ['scripts/test-stage3-batch.mjs'])) return;
     if (!await run('slice-task-failures', ['scripts/test-slice-task-failures.mjs'])) return;
-    for (const name of ['versions', 'layout-tools', 'layout-structure', 'style-edit', 'parity-boundaries']) {
+    for (const name of ['versions', 'layout-structure', 'style-edit', 'parity-boundaries']) {
       if (!await run(name, [`scripts/test-${name}.mjs`])) return;
     }
     if (!await run('typecheck', [npmCli, 'run', 'typecheck'])) return;

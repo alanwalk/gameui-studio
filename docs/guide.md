@@ -40,12 +40,13 @@
 
 | 路径 | 内容 |
 | --- | --- |
-| `.venv-seg/Scripts/python.exe` | Python 运行环境 |
+| `.venv-seg/Scripts/python.exe` | Windows Python 运行环境 |
+| `.venv-seg/bin/python` | Linux / macOS Python 运行环境 |
 | `.data/segmentation/sam2/source/` | SAM2 源码 |
 | `.data/segmentation/sam2/site/` | 隔离的 Python 依赖 |
 | `.data/segmentation/sam2/sam2.1_hiera_small.pt` | SAM 2.1 small 权重 |
 
-配置为 `configs/sam2.1/sam2.1_hiera_s.yaml`。需要自行按模型项目说明准备依赖与权重，当前服务路径面向 Windows。缺少运行时会返回错误，已有素材仍可检查和导出。
+配置为 `configs/sam2.1/sam2.1_hiera_s.yaml`。需要自行按模型项目说明准备依赖与权重，服务按操作系统选择 Python 路径。缺少运行时会返回错误，已有素材仍可检查和导出。可选 PyMatting 精修、质量诊断及跨平台验证命令见[素材质量与验证](asset-quality.md)。
 
 ### AI 拆图
 
@@ -61,7 +62,7 @@
 
 ## 资源导出
 
-审核素材后导出透明 PNG、素材清单和原图坐标。命名采用 `T_UI_<模块>_<对象>[_<状态>].png`，重复名称会添加数字后缀。
+审核素材后导出透明 PNG、素材清单和已映射的原图坐标。AI 拆图素材最初使用组件表坐标，用于原界面还原前需要重新定位。命名采用 `T_UI_<模块>_<对象>[_<状态>].png`，重复名称会添加数字后缀。
 
 素材图集支持打包预览与导出。整页导出可选择当前界面或全部界面，并按原始尺寸或预设尺寸输出 ZIP；调整尺寸时保持比例，以透明区域补足。
 

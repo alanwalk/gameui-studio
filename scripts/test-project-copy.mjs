@@ -5,6 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { build } from 'esbuild';
 import ts from 'typescript';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 if (!process.env.PROJECT_COPY_TEST_WORKER) {
   const directory = await fs.mkdtemp(path.resolve('.data/project-copy-test-'));
@@ -22,7 +24,15 @@ if (!process.env.PROJECT_COPY_TEST_WORKER) {
   await fs.writeFile(path.join(directory, 'typecheck.log'), diagnosticText);
   if (diagnostics.length) throw new Error(`Scoped TypeScript check failed; details: ${directory}/typecheck.log`);
   console.log(`PASS scoped TypeScript (${files.length} roots); ${allDiagnostics.length - diagnostics.length} dependency diagnostics outside owned files`);
-  await build({ entryPoints: [process.argv[1]], bundle: true, platform: 'node', format: 'esm', packages: 'external', outfile: bundle });
+  await build({ entryPoints: [process.argv[1]], bundle: true, platform: 'node', format: 'esm', packages: 'external', outfile: bundle,
+    plugins: [{ name: 'sidebar-ssr-without-browser-toast-portal', setup(builder) {
+      // ToastQueue owns document/portal setup and has independent browser tests.
+      // Keep real React hooks and the entire sidebar; replace only that portal.
+      builder.onLoad({ filter: /[\\/]ToastQueue\.tsx$/ }, () => ({
+        contents: 'export function ToastQueue({ children }) { return children ?? null; }', loader: 'js',
+      }));
+    } }],
+  });
   const result = spawnSync(process.execPath, [bundle], {
     env: { ...process.env, PROJECT_COPY_TEST_WORKER: '1', GAMEUI_DATA: path.join(directory, 'store') },
     encoding: 'utf8', maxBuffer: 1024 * 1024,
@@ -251,41 +261,39 @@ async function runTests() {
     const storedIds = new Set((await store.listProjects()).map((entry) => entry.id));
     assert.ok(simultaneous.every((result) => storedIds.has(result.project.id)));
     const calls = [];
-    function buttons(tree) {
-      if (!tree || typeof tree !== 'object') return [];
-      if (Array.isArray(tree)) return tree.flatMap(buttons);
-      const own = tree.type === 'button' ? [tree] : [];
-      return [...own, ...buttons(tree.props?.children)];
+    function renderSidebar(properties) {
+      // Use a real hook context. Menu clicks and the current delete-confirmation
+      // flow belong to test-screen-delete-confirmation.mjs/browser regressions.
+      return renderToStaticMarkup(createElement(ProjectSidebar, properties));
+    }
+    function copyButtons(markup) {
+      return markup.match(/<button\b[^>]*aria-label="复制[^"]*"[^>]*>/g) ?? [];
     }
     const props = {
       projects: [project], activeProjectId: 'p1', activeScreenId: 's1',
       onSelectProject: (id) => calls.push(['selectProject', id]), onSelectScreen: (id) => calls.push(['selectScreen', id]),
       onDeleteProject: (id) => calls.push(['deleteProject', id]), onDeleteScreen: (id) => calls.push(['deleteScreen', id]),
-      onAddProject() {}, onAddScreen() {},
+      onRenameScreen: async () => {}, onAddScreen() {},
     };
-    assert.equal(buttons(ProjectSidebar(props)).filter((button) => button.props['aria-label']?.startsWith('复制')).length, 0);
+    assert.equal(copyButtons(renderSidebar(props)).length, 0);
     for (const busy of [false, true]) {
-      const rendered = buttons(ProjectSidebar({ ...props, busy, onCopyProject: (id) => calls.push(['copyProject', id]), onCopyScreen: (projectId, screenId) => calls.push(['copyScreen', projectId, screenId]) }));
-      const copyButtons = rendered.filter((button) => button.props['aria-label']?.startsWith('复制'));
-      assert.equal(copyButtons.length, 3);
-      for (const button of copyButtons) {
-        assert.equal(button.props.disabled, busy);
-        assert.equal(button.props.title, button.props['aria-label']);
+      const markup = renderSidebar({ ...props, busy, onCopyProject: (id) => calls.push(['copyProject', id]), onCopyScreen: (projectId, screenId) => calls.push(['copyScreen', projectId, screenId]) });
+      const renderedCopies = copyButtons(markup);
+      assert.equal(renderedCopies.length, 3);
+      assert.deepEqual(renderedCopies.map((button) => button.match(/aria-label="([^"]*)"/)[1]),
+        ['复制项目：游戏', '复制界面：主界面', '复制界面：商店']);
+      for (const button of renderedCopies) {
+        assert.equal(/\bdisabled=/.test(button), busy);
+        assert.equal(button.match(/title="([^"]*)"/)[1], button.match(/aria-label="([^"]*)"/)[1]);
       }
-      if (!busy) copyButtons.forEach((button) => button.props.onClick());
-      rendered.find((button) => button.props.className === 'proj-name').props.onClick();
-      rendered.find((button) => button.props.className === 'screen-pick').props.onClick();
-      rendered.find((button) => button.props.title === '删除项目').props.onClick();
-      const deleteScreen = rendered.find((button) => button.props.className === 'screen-del');
-      assert.equal(deleteScreen.props.disabled, false);
-      deleteScreen.props.onClick();
+      const deleteScreen = markup.match(/<button\b[^>]*aria-label="删除界面：主界面"[^>]*>/)[0];
+      assert.equal(/\bdisabled=/.test(deleteScreen), busy);
     }
-    assert.deepEqual(calls.slice(0, 3), [['copyProject', 'p1'], ['copyScreen', 'p1', 's1'], ['copyScreen', 'p1', 's2']]);
-    assert.deepEqual(calls.slice(3, 7), calls.slice(7));
-    assert.deepEqual(calls.slice(3, 7), [['selectProject', 'p1'], ['selectScreen', 's1'], ['deleteProject', 'p1'], ['deleteScreen', 's1']]);
-    const oneScreenButtons = buttons(ProjectSidebar({ ...props, projects: [{ ...project, screens: [screen] }], busy: true }));
-    assert.equal(oneScreenButtons.find((button) => button.props.className === 'screen-del').props.disabled, true);
-    console.log('PASS concurrent HTTP queue updates; optional sidebar callbacks/labels/busy and original select/delete semantics');
+    const oneScreenMarkup = renderSidebar({ ...props, projects: [{ ...project, screens: [screen] }], busy: false });
+    const lastScreenDelete = oneScreenMarkup.match(/<button\b[^>]*aria-label="删除界面：主界面"[^>]*>/)[0];
+    assert.equal(/\bdisabled=/.test(lastScreenDelete), true);
+    assert.deepEqual(calls, [], 'rendering must not invoke project or screen mutations');
+    console.log('PASS concurrent HTTP queue updates; real SSR sidebar optional copy controls/labels/busy and last-screen protection (clicks require browser coverage)');
     console.log('Boundary: in-process rollback verified; process termination/power loss between JSON renames is not crash atomic. No model/Unity/build invoked.');
   } finally {
     globalThis.fetch = nativeFetch;

@@ -27,7 +27,7 @@ export type PageTransform = {
   scale: number;
   offset: { x: number; y: number };
 };
-type PageAsset = ExportEntry & { id: string; approved: true; path: string; exportRect: Rect };
+type PageAsset = ExportEntry & { id: string; approved: true; path: string; exportRect: Rect | null };
 export type PageExportManifest = {
   schemaVersion: 1;
   project: Pick<Project, 'id' | 'name' | 'orientation' | 'size' | 'stylePrompt' | 'styleImage'>;
@@ -195,7 +195,7 @@ export async function buildPageExport(project: Project, settings: Settings, opti
           for (const [index, entry] of pack.entries.entries()) {
             assets.push({ ...entry, id: named[index].element.id, approved: true,
               path: `${directory}/assets/png/${entry.fileName}`,
-              exportRect: mapPageExportRect(entry.source, transform) });
+              exportRect: entry.requiresPlacement ? null : mapPageExportRect(entry.source, transform) });
           }
         }
       }
@@ -212,7 +212,8 @@ export async function buildPageExport(project: Project, settings: Settings, opti
       manifest.pages.push(page);
       zip.file(`${directory}/manifest.json`, JSON.stringify(page, null, 2));
       const coords = assets.map((asset) => ({ file: asset.path, id: asset.id, layer: asset.layer,
-        sourceRect: asset.source, exportRect: asset.exportRect, imageSize: asset.imageSize }));
+        sourceRect: asset.source, exportRect: asset.exportRect, imageSize: asset.imageSize,
+        ...(asset.requiresPlacement ? { coordinateSpace: 'sheet', requiresPlacement: true, sourceSheetImage: asset.sourceSheetImage } : {}) }));
       zip.file(`${directory}/coords.json`, JSON.stringify(coords, null, 2));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -227,7 +228,7 @@ export async function buildPageExport(project: Project, settings: Settings, opti
   ].join('\n');
   zip.file('manifest.json', JSON.stringify(manifest, null, 2));
   zip.file('REPORT.txt', report);
-  zip.file('README.txt', '整图为 PNG；contain 等比缩放，透明居中补边。\nmanifest.transform 记录实际源图尺寸、导出尺寸、scale、offset。\ncoords.sourceRect 是源图像素；exportRect 是导出整图像素，保留小数。\nassets/png 保留已存素材的原始分辨率，不随整图预设缩放；assets/coords.json 沿用原素材包的源图坐标。\n版本 styleSnapshot 为版本风格，project.stylePrompt/styleImage 为项目当前风格。\n仅导出当前版本、同源图的已存素材任务；编辑器未保存修改不包含在内。');
+  zip.file('README.txt', '整图为 PNG；contain 等比缩放，透明居中补边。\nmanifest.transform 记录实际源图尺寸、导出尺寸、scale、offset。\n普通素材的 coords.sourceRect 是源图像素；exportRect 是导出整图像素，保留小数。\ncoordinateSpace=sheet、requiresPlacement=true 的素材坐标属于 AI 组件表，sourceSheetImage 记录组件表引用；未映射到原界面，其 exportRect 为 null，需要重新定位。\nassets/png 保留已存素材的原始分辨率，不随整图预设缩放；assets/coords.json 沿用原素材包标明的坐标空间。\n版本 styleSnapshot 为版本风格，project.stylePrompt/styleImage 为项目当前风格。\n仅导出当前版本、同源图的已存素材任务；编辑器未保存修改不包含在内。');
   return { blob: await zip.generateAsync({ type: 'blob' }),
     fileName: `ui-pages-${safeSegment(project.name)}-${options.size}.zip`, manifest, report };
 }

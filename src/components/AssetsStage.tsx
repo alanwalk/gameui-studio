@@ -9,14 +9,9 @@ import { PanZoomSurface } from './PanZoomSurface';
 import { StudioDialog } from './StudioDialog';
 import { ToastQueue } from './ToastQueue';
 import { createUuid } from '../lib/uuid';
+import { buildAiSlicePrompt } from '../lib/assetPrompts';
+import type { TextPolicy } from '../types';
 
-const DEFAULT_AI_SLICE_PROMPT = [
-  '将这张游戏 UI 截图中的所有可复用物件拆分为独立组件。',
-  '按面板、按钮、图标、徽章、边框、装饰和进度条分类，分区排布成整齐的组件表。',
-  '每个组件保持完整轮廓、原始比例、配色、材质、光照和画风，组件之间留出充足间距，不重叠。',
-  '去掉整屏背景、角色立绘和不可复用的场景内容；不要添加文字标签、网格线、阴影或宿主应用界面。',
-  '透明背景，只输出一张适合自动切图的独立组件素材表。',
-].join('');
 const DEFAULT_AI_SLICE_FOCUS = '透明背景，按面板、按钮、图标、徽章、边框、装饰和进度条分类，组件之间留出充足间距。';
 
 type Props = {
@@ -44,6 +39,8 @@ export function AssetsStage({screenName,version,busy,onImport,panelProps,exportS
   const [aiSlicePrompt,setAiSlicePrompt]=useState(DEFAULT_AI_SLICE_FOCUS);
   const [aiSliceWorking,setAiSliceWorking]=useState(false);
   const [aiSliceError,setAiSliceError]=useState('');
+  const [aiTextPolicy,setAiTextPolicy]=useState<TextPolicy>('separate');
+  const [keepCharacters,setKeepCharacters]=useState(true);
   const screen = screens?.find(entry => entry.id === screenId);
   const latestManual = useRef({
     elements: panelProps.elements ?? [],
@@ -145,7 +142,8 @@ export function AssetsStage({screenName,version,busy,onImport,panelProps,exportS
         const image = await loadImageElement(request.source.dataUrl);
         const pixels = toImageData(image);
         const slice = sliceElement(pixels, element.rect, request.settings!);
-        extracted = { ...element, slice, extractionMethod: 'color-key', repainted: false, maskImage: undefined };
+        extracted = { ...element, slice, approved: false, extractionMethod: 'color-key', repainted: false,
+          maskImage: undefined, segmentationDiagnostics: undefined };
       }
       const current = latestManual.current;
       if (session !== manualSession.current || operation !== manualOperation.current) return;
@@ -196,12 +194,12 @@ export function AssetsStage({screenName,version,busy,onImport,panelProps,exportS
       const size = reference.width > reference.height ? '1536x1024' : '1024x1536';
       const sheet = await generateAiSliceSheet({
         referenceDataUrl: reference.dataUrl,
-        prompt: `${DEFAULT_AI_SLICE_PROMPT}\n补充要求：${prompt}`,
+        prompt: buildAiSlicePrompt({ textPolicy: aiTextPolicy, keepCharacters }, prompt),
         size,
       });
       await onImportGeneratedVersion(sheet, prompt);
       setAiSliceOpen(false);
-      setNotice('AI 拆图完成，组件已写入当前素材任务');
+      setNotice('组件已写入当前素材任务，请检查边缘、完整性和文字后审核');
     } catch (reason) {
       setAiSliceError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -269,12 +267,21 @@ export function AssetsStage({screenName,version,busy,onImport,panelProps,exportS
       <button key={entry.id} className={entry.id === version?.id ? 'active' : ''} disabled={editorBusy} onClick={() => onSelectVersion?.(entry.id)}>v{index+1}</button>)}</footer>
     {aiSliceOpen && <StudioDialog title="AI 拆图" locked={aiSliceWorking} onClose={() => setAiSliceOpen(false)}>
       <div className="studio-panel-content ai-slice-form">
-        <p>图像模型会把当前结果重绘成一张透明背景的独立组件排版图，再交给现有检测和 SAM2 切图流程。当前界面版本不会被覆盖。</p>
+        <p>将当前界面重绘为透明组件表，按独立像素区域拆分为待审核素材。适合去字、补底和整理可复用资源，生成内容可能与原图有差异。</p>
+        <label>已有文字
+          <select aria-label="组件表文字处理" value={aiTextPolicy} disabled={aiSliceWorking}
+            onChange={event=>setAiTextPolicy(event.target.value as TextPolicy)}>
+            <option value="separate">去掉数值与标签，保留空白底材</option>
+            <option value="preserve">保留素材已有文字</option>
+          </select>
+        </label>
+        <label><input type="checkbox" checked={keepCharacters} disabled={aiSliceWorking}
+          onChange={event=>setKeepCharacters(event.target.checked)} />保留角色、宠物与独立插画</label>
         <label>拆分要求
           <textarea aria-label="拆分要求" value={aiSlicePrompt} maxLength={4000} disabled={aiSliceWorking}
             onChange={event=>setAiSlicePrompt(event.target.value)} />
         </label>
-        <p className="hint">会调用图像模型，可能产生费用。生成结果会保存为新的“AI 拆图素材表”版本。</p>
+        <p className="hint">生成的组件加入当前素材任务。请在浅色和深色底上检查，确认后勾选审核通过再导出。</p>
         {aiSliceError && <p role="alert" className="err">{aiSliceError}</p>}
         <div className="btn-row">
           <button disabled={aiSliceWorking} onClick={()=>setAiSliceOpen(false)}>取消</button>

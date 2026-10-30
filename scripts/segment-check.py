@@ -39,7 +39,7 @@ def invoke(evidence, name, request, extra_args=(), expected_ok=True):
     return response, execution
 
 
-def verify_pixels(source, mask_image, target_image):
+def verify_pixels(source, mask_image, target_image, response):
     assert source.size == mask_image.size == target_image.size
     assert mask_image.mode == "L" and target_image.mode == "RGBA"
     original = np.asarray(source.convert("RGBA"))
@@ -47,8 +47,29 @@ def verify_pixels(source, mask_image, target_image):
     target = np.asarray(target_image)
     assert set(np.unique(mask)).issubset({0, 255})
     assert (mask > 0).any()
-    assert np.array_equal(target[:, :, :3], original[:, :, :3]), "source RGB changed"
-    assert np.array_equal(target[:, :, 3], np.where(mask > 0, original[:, :, 3], 0))
+    assert response["protocolVersion"] == 2
+    assert response["quality"]["status"] in ("review", "failed")
+    visible = target[:, :, 3] > 0
+    assert visible.any()
+    for key in ("promptBounds", "inferenceBounds", "maskBounds", "outputBounds"):
+        left, top, right, bottom = response[key]
+        assert all(type(value) is int for value in response[key])
+        assert 0 <= left < right <= source.width and 0 <= top < bottom <= source.height
+    left, top, right, bottom = response["outputBounds"]
+    outside = visible.copy()
+    outside[top:bottom, left:right] = False
+    assert not outside.any(), "visible alpha was clipped by the declared output bounds"
+    rows, columns = np.nonzero(mask)
+    assert response["maskBounds"] == [int(columns.min()), int(rows.min()), int(columns.max()) + 1, int(rows.max()) + 1]
+    refinement = response["refinement"]
+    if refinement["status"] in ("preserved", "degraded"):
+        assert np.array_equal(target[:, :, :3][visible], original[:, :, :3][visible]), "native foreground RGB changed"
+        assert np.array_equal(target[:, :, 3], np.where(mask > 0, original[:, :, 3], 0))
+    else:
+        assert refinement["method"] == "pymatting-cf"
+        assert refinement["softAlphaPixels"] == int(((target[:, :, 3] > 0) & (target[:, :, 3] < 255)).sum())
+    if refinement["status"] == "degraded":
+        assert refinement["reason"], "an unrefined result must disclose its cause"
 
 
 def comparison(source, mask_image, target, box, destination):
@@ -101,7 +122,7 @@ def main():
         response, execution = invoke(evidence, name, request)
         assert response["checkpointSha256"] == manifest["weightsSha256"]
         with Image.open(response["maskPath"]) as mask, Image.open(response["rgbaPath"]) as target:
-            verify_pixels(source, mask, target)
+            verify_pixels(source, mask, target, response)
             mask_array = np.asarray(mask) > 0
             x0, y0, x1, y1 = box
             inside_ratio = float(mask_array[y0:y1, x0:x1].sum() / mask_array.sum())
@@ -123,7 +144,7 @@ def main():
     assert response["elapsedMs"] == response["timings"]["totalMs"]
     with Image.open(io.BytesIO(base64.b64decode(response["maskBase64"]))) as mask, \
          Image.open(io.BytesIO(base64.b64decode(response["rgbaBase64"]))) as target:
-        verify_pixels(source, mask, target)
+        verify_pixels(source, mask, target, response)
     report["checks"].append({"name": "base64-and-positive-negative-points", "passed": True,
                               "execution": execution, "timings": response["timings"]})
     invalid_cases = [

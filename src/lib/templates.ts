@@ -54,7 +54,7 @@ export const README_NOTE = [
   '',
   '- `png/` - 透明 PNG 素材，按 UI 规范命名 `T_UI_<模块>_<对象>[_<状态>].png`',
   '- `manifest.json` - 每张图的坐标、类型、状态、九宫格建议',
-  '- `coords.json` - 只含原图坐标，供自行还原布局',
+  '- `coords.json` - 素材坐标；coordinateSpace=sheet 的组件表素材需要重新摆放，不是原界面坐标',
   '- `GameUiSliceImporter.cs` - Unity Editor 脚本，批量设置 Sprite 导入参数',
   '',
   '## 导入步骤',
@@ -73,7 +73,8 @@ export const README_NOTE = [
   '- extractionMethod 记录提取来源：color-key（色键）、segmentation（分割）、repaint（重绘）、manual（手工）；旧数据未知时省略。',
   '- needsAi 只表示补图意图，不代表成功；repainted 仅来自成功标记或 repaint 提取方式。',
   '- processingStatus / processingError 保留处理状态与错误，失败后导出的原图回退可据此识别。',
-  '- imageSize 是 PNG 像素尺寸；sourceMapping 将完整 PNG 的 destination 矩形映射回原图 source 矩形，尺寸不同表示缩放。当前切片无独立裁剪偏移，不推测 trim offset。',
+  '- imageSize 是 PNG 像素尺寸；sourceMapping 将完整 PNG 的 destination 映射到所属图片的 source 矩形，尺寸不同表示缩放。',
+  '- coordinateSpace=sheet、requiresPlacement=true 表示 AI 组件表坐标；sourceSheetImage 记录原始组件表引用，不能据此直接还原原界面。整页导出的此类素材 exportRect 为 null。',
   '- `repainted: true` 的素材由模型补全遮挡后重绘，风格可能与原图略有差异，需人工复核。',
   '',
 ].join('\n');

@@ -3,6 +3,7 @@ import type { Settings, UiElement } from '../types';
 import { suggestNineSlice } from '../lib/geometry';
 import { buildFileName } from '../lib/naming';
 import { canvasToDataUrl } from '../lib/image';
+import { AssetQualityFeedback } from './AssetQualityFeedback';
 
 type Props = {
   element: UiElement | null;
@@ -96,6 +97,7 @@ export function Inspector({ element, settings, onRename }: Props) {
   return (
     <>
       <Preview element={element} />
+      <AssetQualityFeedback element={element} />
 
       <div className="panel">
         <div className="card-name" style={{ marginBottom: 8, color: 'var(--key)' }}>
@@ -160,7 +162,7 @@ export function Inspector({ element, settings, onRename }: Props) {
           <label>边缘检查</label>
           <div className="card-meta">
             {quietEdge ? (
-              <span className="tag ok">四边干净</span>
+              <span className="tag">未检测到框边异常</span>
             ) : (
               slice.border.dirtySides.map((side) => (
                 <span key={side} className="tag dirty">
@@ -192,7 +194,7 @@ export function Inspector({ element, settings, onRename }: Props) {
       <div className="field">
         <label>遮挡</label>
         <p className="hint" style={{ margin: 0 }}>
-          {element.occluded ? '被上层元素覆盖，已标记为需补图。' : '无覆盖，本地色键即可切干净。'}
+          {element.occluded ? '被上层元素覆盖，已标记为需补图。' : '未检测到覆盖；仍需检查背景、文字和透明边缘。'}
         </p>
       </div>
 

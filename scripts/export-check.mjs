@@ -39,8 +39,13 @@ class CanvasStub {
   dataUrl = pngs[0];
   getContext() {
     return {
-      drawImage: (image) => { this.dataUrl = image.src; },
+      drawImage: (image) => { this.dataUrl = image.src ?? image.dataUrl; },
       putImageData: () => {},
+      getImageData: (_x, _y, width, height) => {
+        const data = new Uint8ClampedArray(width * height * 4);
+        data.set([255, 255, 255, 255], (Math.floor(height / 2) * width + Math.floor(width / 2)) * 4);
+        return { data, width, height };
+      },
     };
   }
   toDataURL() { return this.dataUrl; }
@@ -74,6 +79,7 @@ async function readPack(elements, options = settings) {
   assert.deepEqual(manifest, JSON.parse(JSON.stringify(result.entries)));
   assert.deepEqual(coords, manifest.map((entry) => ({
     file: entry.fileName, ...entry.source, layer: entry.layer,
+    ...(entry.requiresPlacement ? { coordinateSpace: 'sheet', requiresPlacement: true, sourceSheetImage: entry.sourceSheetImage } : {}),
   })));
   assert.deepEqual(
     Object.keys(zip.files).filter((name) => name.startsWith('png/') && !zip.files[name].dir).sort(),
@@ -117,9 +123,10 @@ await check('pipeline uniqueness survives filename rebuilding and export', async
   const detected = ['CoinIcon', 'CoinIcon', 'CoinIcon02', 'CoinIcon', 'CoinIconPressed', 'CoinIconPressed']
     .map((label, layer) => ({ label, layer, kind: 'icon', description: '', rect: { x: 0, y: 0, w: 1, h: 1 } }));
   const prepared = toUiElements(detected, settings);
+  assert.ok(prepared.every((item) => item.approved === false), 'detection is not human approval');
   const rebuilt = prepared.map((item) => buildFileName(settings.module, item.objectName, item.state));
   assert.equal(new Set(rebuilt).size, prepared.length);
-  const { manifest } = await readPack(prepared.map((item) => ({ ...item, slice: element(0).slice })));
+  const { manifest } = await readPack(prepared.map((item) => ({ ...item, approved: true, slice: element(0).slice })));
   assert.deepEqual(manifest.map((entry) => entry.fileName), rebuilt);
 });
 
@@ -195,12 +202,28 @@ await check('fallback processing status/error and explicit source-to-PNG scaling
   });
 });
 
+await check('AI sheet coordinates remain explicitly distinct from original-screen placement after repair', async () => {
+  const input = element(0, {
+    coordinateSpace: 'sheet', sourceSheetImage: 'original-sheet.png',
+    extractionMethod: 'repaint', repainted: true, textPolicy: 'separate',
+    rect: { x: 700, y: 200, w: 150, h: 30 },
+  });
+  const { zip, manifest } = await readPack([input]);
+  assert.equal(manifest[0].coordinateSpace, 'sheet');
+  assert.equal(manifest[0].requiresPlacement, true);
+  assert.equal(manifest[0].sourceSheetImage, 'original-sheet.png');
+  assert.equal(manifest[0].textPolicy, 'separate');
+  assert.match(await zip.file('README.md').async('string'), /不能据此直接还原原界面/);
+});
+
 const savedGlobals = { document: globalThis.document, Image: globalThis.Image,
   ImageData: globalThis.ImageData, fetch: globalThis.fetch };
 try {
   globalThis.document = { createElement: () => new CanvasStub() };
   globalThis.Image = class {
     src = '';
+    naturalWidth = 3;
+    naturalHeight = 3;
     async decode() { if (!pngs.includes(this.src)) throw new Error('Fixture decode failed'); }
   };
   globalThis.ImageData = class {
@@ -256,7 +279,8 @@ try {
     const sliced = sliceAll([element(0, { repainted: true, extractionMethod: 'repaint' })], source, settings, () => {});
     assert.equal(sliced[0].extractionMethod, 'color-key');
     assert.equal(sliced[0].repainted, false);
-    assert.equal((await readPack(sliced)).manifest[0].repainted, false);
+    assert.equal(sliced[0].approved, false, 'new pixels invalidate previous review');
+    assert.equal((await readPack(sliced.map((item) => ({ ...item, approved: true })))).manifest[0].repainted, false);
   });
 
   await check('real plate flow marks only successful decode/fit/slice; failures retain color-key', async () => {
@@ -266,8 +290,14 @@ try {
       if (call === 1) throw new Error('Fixture network failure');
       return { ok: true, json: async () => ({ dataUrl: call === 2 ? 'broken-image' : pngs[1] }) };
     };
-    const inputs = [0, 1, 2, 3, 4].map((id) => element(id, { extractionMethod: 'color-key', repainted: false }));
+    const inputs = [0, 1, 2, 3, 4].map((id) => element(id, {
+      rect: { x: 0, y: 0, w: 1, h: 1 }, extractionMethod: 'color-key', repainted: false,
+    }));
+    inputs[0].approved = false;
+    inputs[0].processingStatus = 'failed';
+    inputs[0].processingError = 'previous failure';
     inputs[3].approved = false;
+    inputs[3].needsAi = false;
     inputs[4].needsAi = false;
     const progress = [];
     const { updated, outcomes } = await plateOccluded(inputs, { dataUrl: pngs[0] }, (p) => progress.push(p));
@@ -276,10 +306,13 @@ try {
     assert.equal(progress.at(-1).done, 3);
     assert.equal(updated[0].extractionMethod, 'repaint');
     assert.equal(updated[0].repainted, true);
+    assert.equal(updated[0].approved, false, 'repainted pixels need a fresh review');
+    assert.equal(updated[0].processingStatus, 'done');
+    assert.equal(updated[0].processingError, undefined);
     assert.equal(updated[0].slice.canvas.dataUrl, pngs[1]);
     for (let i = 1; i < inputs.length; i++) assert.equal(updated[i], inputs[i]);
     assert.equal(inputs[0].repainted, false, 'plate must not mutate its input');
-    const { manifest } = await readPack(updated);
+    const { manifest } = await readPack(updated.map((item, index) => index === 0 ? { ...item, approved: true } : item));
     assert.deepEqual(manifest.map((entry) => entry.repainted), [true, false, false, false]);
     assert.deepEqual(manifest.map((entry) => entry.extractionMethod), ['repaint', 'color-key', 'color-key', 'color-key']);
   });

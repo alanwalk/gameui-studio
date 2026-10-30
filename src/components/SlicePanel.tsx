@@ -28,7 +28,7 @@ export function SlicePanel({
   source, sourceImage, settings, onChangeElements, atlas, picking, onColor,
   manualSelecting, onStartManualSlice, onCancelManualSlice,
 }: Props) {
-  const hasAiTargets = elements?.some((element) => element.needsAi && element.approved) ?? false;
+  const hasAiTargets = elements?.some((element) => element.needsAi && element.kind !== 'text' && !element.repainted) ?? false;
   const hasExportable = elements?.some((element) => element.approved && element.slice) ?? false;
 
   return (
